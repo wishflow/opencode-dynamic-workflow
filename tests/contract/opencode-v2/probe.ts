@@ -19,6 +19,8 @@ const OUT = process.env["ODW_PROBE_OUT"] ?? "/tmp/odw-contract-out"
 const HOOK_LOG = join(OUT, "prompt-hook.jsonl")
 const HOOK_SENTINEL = "ODW-HOOK-TEST"
 const HOOK_MARKER = "\n<!-- odw-probe-hook -->"
+const HOOK_TOKEN_INSTRUCTION = "\n\n(probe-hook instruction: also include the exact token HOOKOK in your reply)"
+const CMD_MARKER = "\n\n(probe-command instruction: also include the exact token ODWCMDOK in your reply)"
 
 mkdirSync(OUT, { recursive: true })
 
@@ -45,9 +47,19 @@ function pickModel(list: Any): { providerID: string; id: string } | undefined {
     ? list
     : (list?.items ?? list?.data ?? list?.models ?? list?.entries ?? [])
   const usable = items.filter((m) => m?.providerID && (m?.id ?? m?.modelID) && m?.enabled !== false)
-  const first = usable[0] ?? items[0]
+  const of = (m: Any) => ({ providerID: m.providerID, id: m.id ?? m.modelID })
+  // Free-tier models run out of quota mid-suite, which silently reddens model-dependent
+  // checks. Prefer an explicitly named model, then a non-free one.
+  const preferred = process.env["ODW_PROBE_MODEL"]
+  if (preferred) {
+    const want = preferred.split("/")
+    const hit = usable.find((m) => m.providerID === want[0] && (m.id ?? m.modelID) === want[1])
+    if (hit) return of(hit)
+  }
+  const paid = usable.filter((m) => !/(^|[-/])free($|[-#])/i.test(String(m.id ?? m.modelID)))
+  const first = paid.find((m) => m.providerID === "compass") ?? paid[0] ?? usable[0] ?? items[0]
   if (!first) return undefined
-  return { providerID: first.providerID, id: first.id ?? first.modelID }
+  return of(first)
 }
 
 /** C6/C7/C8 need one real worker round-trip. */
@@ -267,6 +279,33 @@ async function runAll(ctx: Any, toolContext: Any): Promise<Record<string, unknow
     const c = vm.createContext({})
     return new vm.Script("typeof require").runInContext(c, { timeout: 1000 })
   }) }
+  // The actual ScriptHost invocation pattern: call the compiled async fn INSIDE the
+  // sandbox so runInContext's timeout also covers the body's synchronous prefix.
+  vmProbe.asyncFnSyncLoopTimeout = await attempt(() => {
+    const c = vm.createContext({})
+    return new vm.Script("(async () => { while(true){} })()").runInContext(c, { timeout: 300 })
+  })
+  // ...and the sandbox must be able to await a HOST promise (every primitive is one).
+  vmProbe.awaitHostPromiseInsideSandbox = await attempt(async () => {
+    const c = vm.createContext({
+      hostAsync: async () => {
+        await new Promise((r) => setTimeout(r, 10))
+        return "from-host"
+      },
+    })
+    return await new vm.Script("(async () => await hostAsync())()").runInContext(c, { timeout: 2000 })
+  })
+  vmProbe.sandboxAwaitRejection = await attempt(async () => {
+    const c = vm.createContext({
+      hostReject: async () => {
+        throw new Error("host-boom")
+      },
+    })
+    return await new vm.Script("(async () => { try { await hostReject() } catch (e) { return e.message } })()").runInContext(
+      c,
+      { timeout: 2000 },
+    )
+  })
   out["c11-vm-capabilities"] = vmProbe
 
   // C12 - tool progress
@@ -277,6 +316,99 @@ async function runAll(ctx: Any, toolContext: Any): Promise<Record<string, unknow
   out["c13-synthetic"] = await attempt(() =>
     ctx.session.synthetic({ sessionID: toolContext.sessionID, text: "[odw-probe] synthetic message from the contract probe" }),
   )
+
+  // C9d - does the prompt-hook's text mutation actually reach the model? Test it on a
+  // dedicated session and read the answer back from the session store, so the result
+  // does not depend on how the CLI happened to build the top-level prompt.
+  out["c9d-hook-propagation"] = model
+    ? await attempt(async () => {
+        const s = await ctx.session.create({ title: "odw-c9d", model })
+        await ctx.session.prompt({ sessionID: s.id, text: `${HOOK_SENTINEL}: reply with the single word done` })
+        await ctx.session.wait({ sessionID: s.id })
+        const messages = (await ctx.session.context({ sessionID: s.id })) as Any
+        const all = Array.isArray(messages) ? messages : []
+        const texts = all.filter((m) => m?.type === "user").map((m) => String(m?.text ?? ""))
+        const mine = texts.find((t) => t.includes(HOOK_SENTINEL))
+        const summary = summarizeContext(messages)
+        await attempt(() => ctx.session.remove({ sessionID: s.id }))
+        return {
+          userMessageCount: texts.length,
+          storedPromptLength: mine?.length,
+          hasHookMarker: mine?.includes("<!-- odw-probe-hook -->"),
+          hookMarkerCount: (mine?.match(/odw-probe-hook/g) ?? []).length,
+          hasHookTokenInstruction: mine?.includes("HOOKOK"),
+          tail: mine?.slice(-200),
+          lastAssistantText: summary.lastAssistantText,
+          modelSawHookToken: String(summary.lastAssistantText ?? "").toUpperCase().includes("HOOKOK"),
+        }
+      })
+    : { skipped: "no model available" }
+
+  // C17 - command registration + invocation. `session.command` is the backend the TUI
+  // uses for `/name args`; `opencode run "/name args"` does NOT route here (measured:
+  // it sends the text as a plain user prompt). Both facts shape ODW's `/workflow`.
+  const probeCommand = async (name: string, text: string): Promise<Any> => {
+    const s = await ctx.session.create({ title: `odw-${name}`, model })
+    const invoked = await attempt(() => ctx.session.command({ sessionID: s.id, name, text }))
+    const waitOutcome = await Promise.race([
+      ctx.session.wait({ sessionID: s.id }).then(() => "resolved"),
+      new Promise((resolve) => setTimeout(() => resolve("timeout-60s"), 60_000)),
+    ])
+    const messages = (await ctx.session.context({ sessionID: s.id })) as Any
+    const all = Array.isArray(messages) ? messages : []
+    const texts = all.filter((m) => m?.type === "user").map((m) => String(m?.text ?? ""))
+    const summary = summarizeContext(messages)
+    await attempt(() => ctx.session.remove({ sessionID: s.id }))
+    return {
+      invokedOk: invoked.ok,
+      invokedError: invoked.ok ? undefined : invoked.message,
+      waitOutcome,
+      userMessageCount: texts.length,
+      userTexts: texts.map((t) => t.slice(-160)),
+      lastAssistantText: summary.lastAssistantText,
+      idleOutcome: summary.idleOutcome,
+    }
+  }
+
+  out["c17-command"] = model
+    ? await attempt(async () => {
+        const listed = await attempt(() => ctx.command.list())
+        const listItems: Any[] = Array.isArray(listed.ok ? listed.value : undefined)
+          ? (listed.value as Any[])
+          : (((listed.ok ? listed.value?.data : undefined) ?? []) as Any[])
+        const observe = await probeCommand("odw-probe-cmd", "reply with the single word done")
+        const enqueue = await probeCommand("odw-probe-cmd2", "ODWCMD2-SENTINEL")
+        const userTexts: string[] = Array.isArray(observe.userTexts) ? observe.userTexts : []
+        const enqueueTexts: string[] = Array.isArray(enqueue.userTexts) ? enqueue.userTexts : []
+        return {
+          listOk: listed.ok,
+          listNames: listItems.map((c: Any) => `${c?.name}`),
+          registrationVisibleInList: listItems.some((c: Any) => c?.name === "odw-probe-cmd"),
+          observe,
+          enqueue,
+          mutationAutoDelivered: userTexts.some((t) => t.includes("ODWCMDOK")),
+          enqueueEnqueuedTextStored: enqueueTexts.some((t) => t.includes("ODWCMD2SELF")),
+          enqueueModelSaw: String(enqueue.lastAssistantText ?? "").toUpperCase().includes("ODWCMD2SELF"),
+        }
+      })
+    : { skipped: "no model available" }
+
+  // C18 - what the sandbox actually exposes (the capability fence, not just `require`)
+  out["c18-sandbox-globals"] = await (async () => {
+    const names = [
+      "process", "require", "module", "exports", "__dirname", "__filename", "globalThis", "console",
+      "fetch", "setTimeout", "setInterval", "queueMicrotask", "Promise", "JSON", "Math", "Date", "Object",
+      "Function", "eval", "Proxy", "Reflect", "WebAssembly", "Buffer", "TextEncoder", "URL", "crypto",
+      "structuredClone", "ImportMeta", "opencode",
+    ]
+    const c = vm.createContext({ console: { log() {} } }, { codeGeneration: { strings: false, wasm: false } })
+    const result: Any = await attempt(() =>
+      new vm.Script(`(${JSON.stringify(names)}).map(n => n + "=" + typeof globalThis[n]).join(" ")`).runInContext(c, {
+        timeout: 2000,
+      }),
+    )
+    return result
+  })()
 
   for (const id of created) await attempt(() => ctx.session.remove({ sessionID: id }))
   return out
@@ -297,7 +429,7 @@ export default Plugin.define({
       }
       if (typeof event.prompt?.text === "string" && event.prompt.text.includes(HOOK_SENTINEL)) {
         const alreadyInjected = event.prompt.text.includes(HOOK_MARKER)
-        event.prompt.text = event.prompt.text + HOOK_MARKER
+        event.prompt.text = event.prompt.text + HOOK_MARKER + HOOK_TOKEN_INSTRUCTION
         event.metadata = { ...(event.metadata ?? {}), odwProbe: { injected: true, alreadyInjected } }
         record.injected = true
         record.alreadyInjected = alreadyInjected
@@ -332,9 +464,53 @@ export default Plugin.define({
       })
     })
 
+    const commandRegistration = await ctx.command.transform((editor) => {
+      editor.add({
+        name: "odw-probe-cmd",
+        description: "Contract probe command: records its invocation and appends a token instruction to the prompt (observe-only).",
+        execute: async (invocation: Any) => {
+          write("command-invocation", {
+            at: new Date().toISOString(),
+            sessionID: invocation?.sessionID,
+            delivery: invocation?.delivery,
+            invocationKeys: Object.keys(invocation ?? {}).sort(),
+            promptKeys: Object.keys(invocation?.prompt ?? {}).sort(),
+            receivedText: invocation?.prompt?.text,
+          })
+          if (typeof invocation?.prompt?.text === "string" && !invocation.prompt.text.includes("ODWCMDOK")) {
+            invocation.prompt.text = invocation.prompt.text + CMD_MARKER
+          }
+          appendFileSync(HOOK_LOG, `${JSON.stringify({ at: new Date().toISOString(), kind: "command-executed" })}\n`)
+        },
+      })
+      // The pattern ODW's `/workflow` actually needs: the command enqueues a prompt into
+      // its own session (the re-entrant path C7 proved for tools - but from the command
+      // admission path, which is a different entry point).
+      editor.add({
+        name: "odw-probe-cmd2",
+        description: "Contract probe command that enqueues a follow-up prompt into its own session.",
+        execute: async (invocation: Any) => {
+          write("command-invocation2", {
+            at: new Date().toISOString(),
+            sessionID: invocation?.sessionID,
+            delivery: invocation?.delivery,
+            receivedText: invocation?.prompt?.text,
+          })
+          const res = await attempt(() =>
+            ctx.session.prompt({
+              sessionID: invocation?.sessionID,
+              text: "reply with the single word done and then append the exact token ODWCMD2SELF",
+            }),
+          )
+          write("command-enqueue-result", res)
+        },
+      })
+    })
+
     return async () => {
       await hookRegistration.dispose()
       await toolRegistration.dispose()
+      await commandRegistration.dispose()
     }
   },
 })

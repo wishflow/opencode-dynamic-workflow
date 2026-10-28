@@ -26,7 +26,7 @@ describe.skipIf(!enabled)("opencode v2 contract", () => {
         env: process.env,
       })
       expect(output).not.toContain("FAIL")
-      expect(output).toMatch(/39\/39 passed/)
+      expect(output).toMatch(/55\/55 passed/)
     },
     900_000,
   )

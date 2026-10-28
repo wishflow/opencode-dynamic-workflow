@@ -57,27 +57,38 @@ writeFileSync(join(PROJECT, "opencode.json"), `{\n  "$schema": "https://opencode
 writeFileSync(join(PROJECT, ".directory.json"), JSON.stringify({ directory: DIRECTORY }))
 execFileSync("git", ["init", "-q", "."], { cwd: PROJECT })
 
-// The sentinel makes the probe's prompt hook mutate this very prompt (proves C9).
+// The sentinel makes the probe's prompt hook mutate this prompt (proves C9).
+// Note: `opencode run "/name args"` does NOT dispatch a registered command (measured),
+// so command coverage lives in the probe itself via session.command() (C17).
 const PROMPT =
   "ODW-HOOK-TEST. Use Code Mode and run exactly this, then wait for it to finish:\n" +
   'execute {"code": "return await tools.odw.probe({ scenario: \\"all\\" })"}\n' +
   "After it returns, reply with the single word: done"
 
+// The free-tier default model runs out of quota mid-suite and silently reddens every
+// model-dependent check, so the harness pins an entitled model (override with ODW_PROBE_MODEL).
+const PROBE_MODEL = process.env["ODW_PROBE_MODEL"] ?? "compass/deepseek-v4.1-flash"
+
 console.log(`project: ${PROJECT}`)
-const run = spawnSync("opencode", ["run", "--standalone", "--auto", "--agent", "build", "--print-logs", PROMPT], {
-  cwd: PROJECT,
-  encoding: "utf8",
-  timeout: 900_000,
-  env: {
-    ...process.env,
-    // opencode resolves the server's location from PWD, not from the child's cwd.
-    // Inheriting the caller's PWD silently binds the run to the WRONG project.
-    PWD: PROJECT,
-    ODW_PROBE_OUT: OUT,
-    OPENCODE_DISABLE_MODELS_FETCH: "1",
-    OPENCODE_DISABLE_AUTOUPDATE: "1",
+const run = spawnSync(
+  "opencode",
+  ["run", "--standalone", "--auto", "--agent", "build", "--model", PROBE_MODEL, "--print-logs", PROMPT],
+  {
+    cwd: PROJECT,
+    encoding: "utf8",
+    timeout: 900_000,
+    env: {
+      ...process.env,
+      // opencode resolves the server's location from PWD, not from the child's cwd.
+      // Inheriting the caller's PWD silently binds the run to the WRONG project.
+      PWD: PROJECT,
+      ODW_PROBE_OUT: OUT,
+      ODW_PROBE_MODEL: PROBE_MODEL,
+      OPENCODE_DISABLE_MODELS_FETCH: "1",
+      OPENCODE_DISABLE_AUTOUPDATE: "1",
+    },
   },
-})
+)
 writeFileSync(join(PROJECT, "run.txt"), `${run.stdout ?? ""}\n--- stderr ---\n${run.stderr ?? ""}`)
 console.log(`opencode exit: ${run.status}`)
 

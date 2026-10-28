@@ -129,6 +129,24 @@ export function assertContract({ obs, hookLines, logs, directory }) {
     c11.hostModuleReachable?.requireInContext?.ok === true && c11.hostModuleReachable.requireInContext.value === "undefined",
     c11.hostModuleReachable,
   )
+  check(
+    "C11g",
+    "runInContext timeout also covers an async fn body's synchronous prefix",
+    errOf(c11.asyncFnSyncLoopTimeout),
+    c11.asyncFnSyncLoopTimeout,
+  )
+  check(
+    "C11h",
+    "sandbox can await a host promise (the ScriptHost primitive bridge)",
+    c11.awaitHostPromiseInsideSandbox?.ok === true && c11.awaitHostPromiseInsideSandbox.value === "from-host",
+    c11.awaitHostPromiseInsideSandbox,
+  )
+  check(
+    "C11i",
+    "sandbox catches host promise rejection",
+    c11.sandboxAwaitRejection?.ok === true && c11.sandboxAwaitRejection.value === "host-boom",
+    c11.sandboxAwaitRejection,
+  )
 
   // C12 / C13 - feedback channels
   check("C12a", "tool progress() callable", okOf(get("c12-progress")), get("c12-progress"))
@@ -145,6 +163,58 @@ export function assertContract({ obs, hookLines, logs, directory }) {
     injected.length > 0 && injected.every((l) => l.injectedCount === 1),
     injected.map((l) => l.injectedCount),
   )
+  const delivered = get("c9d-hook-propagation")?.value ?? {}
+  check(
+    "C9d",
+    "hook's text mutation reached the stored prompt (marker appears exactly once)",
+    delivered.hasHookMarker === true && delivered.hookMarkerCount === 1,
+    delivered,
+  )
+  check(
+    "C9e",
+    "the model actually acted on the hook-injected instruction",
+    delivered.modelSawHookToken === true,
+    { lastAssistantText: delivered.lastAssistantText },
+  )
+
+  // C17 - command registration + invocation
+  const cmd = get("c17-command")?.value ?? {}
+  const cmdFile = join(directory, "out", "command-invocation.json")
+  const cmd2File = join(directory, "out", "command-invocation2.json")
+  const cmdWritten = existsSync(cmdFile) ? JSON.parse(readFileSync(cmdFile, "utf8")) : undefined
+  const cmd2Written = existsSync(cmd2File) ? JSON.parse(readFileSync(cmd2File, "utf8")) : undefined
+  check("C17a", "command.transform registration + command.list() succeed", cmd.listOk === true, { listOk: cmd.listOk })
+  check("C17b", "registered command is visible in command.list() (TUI can see it)", cmd.registrationVisibleInList === true, cmd.listNames)
+  check("C17c", "session.command() invoked the command", Boolean(cmdWritten), { cmdWritten, invokedError: cmd.observe?.invokedError })
+  check("C17d", "command received the caller's text as prompt.text", cmdWritten?.receivedText === "reply with the single word done", cmdWritten)
+  check(
+    "C17e",
+    "MEASURED: mutating invocation.prompt.text does NOT by itself deliver a prompt",
+    cmd.mutationAutoDelivered === false && cmd.observe?.userMessageCount === 0,
+    cmd.observe,
+  )
+  check(
+    "C17f",
+    "command.execute() can enqueue a prompt into its own session (re-entrant)",
+    cmd2Written !== undefined && cmd.enqueueEnqueuedTextStored === true,
+    { enqueue: cmd.enqueue, cmd2Written },
+  )
+  check("C17g", "the model acted on the command-enqueued prompt", cmd.enqueueModelSaw === true, {
+    lastAssistantText: cmd.enqueue?.lastAssistantText,
+    waitOutcome: cmd.enqueue?.waitOutcome,
+  })
+
+  // C18 - sandbox globals
+  const sandbox = get("c18-sandbox-globals") ?? {}
+  check("C18", "sandbox globals probed", typeof sandbox.value === "string", sandbox)
+  const globals = Object.fromEntries(
+    String(sandbox.value ?? "")
+      .split(" ")
+      .map((pair) => pair.split("=")),
+  )
+  check("C18a", "no process/require/module/Buffer in the sandbox", globals.process === "undefined" && globals.require === "undefined" && globals.module === "undefined" && globals.Buffer === "undefined", globals)
+  check("C18b", "sandbox has its own standard built-ins", globals.Promise === "function" && globals.JSON === "object" && globals.Object === "function", globals)
+  check("C18c", "eval is still a function but codeGeneration blocks it (see C11b)", globals.eval === "function", globals)
 
   return results
 }

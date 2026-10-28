@@ -43,7 +43,7 @@ ODW_CONTRACT=1 npx vitest run tests/contract
 
 ## 3. 观察结果
 
-`39/39` 通过（`run.mjs` 末行）。关键事实如下。
+`55/55` 通过（`run.mjs` 末行）。关键事实如下。
 
 ### 3.1 契约面（C1–C5）
 
@@ -116,8 +116,13 @@ create → context() 给 [] → prompt() → context() 仍是 0 条 → wait() �
 | 沙箱内 `x instanceof Promise`（跨 realm） | ✗ **`false`** —— 不能跨 realm 做 `instanceof` 判断 |
 | 宿主 async 函数传进沙箱、在沙箱内 await | ✓ 返回正确结果（`42`） |
 | 沙箱内 `typeof require` | `"undefined"` —— 无 ambient 模块访问 |
+| `runInContext({timeout})` 覆盖 **async 函数体的同步前缀** | ✓ `(async () => { while(true){} })()` 被 300ms 超时打断 |
+| 沙箱内 await **宿主** Promise | ✓ 返回 `"from-host"` —— 原语桥的双向都通 |
+| 沙箱内 catch 宿主 Promise 的 reject | ✓ 拿到 `"host-boom"` |
+| 沙箱全局对象面（只注入 `console`） | `process/require/module/exports/__dirname/__filename/Buffer/fetch/setTimeout/opencode` 全为 `undefined`；`Promise/JSON/Math/Date/Object/Function/eval/Proxy/Reflect/TextEncoder/URL/crypto/structuredClone` 均为自带 |
 
 > 结论：A 档可行，且「把原语作为 async 函数注入 sandbox」这条桥是通的。实现时要避开跨 realm `instanceof`。
+> 沙箱有**自己 realm 的标准内置对象**，所以 ScriptHost 不需要（也不应该）注入宿主的内置对象 —— 跨 realm 混用只会让 `instanceof` 更混乱。只注入 `console` + 原语入口。
 
 ### 3.6 反馈通道（C12 / C13 / C9）
 
@@ -134,6 +139,32 @@ create → context() 给 [] → prompt() → context() 仍是 0 条 → wait() �
 
 > `event.prompt` 里还有 `files`/`skills`/`agents`，ODW 的 prompt hook 只碰 `text`，其余原样保留。
 
+### 3.7 命令（C17）—— `/workflow` 的落地方式
+
+| 项 | 观察 |
+|---|---|
+| `ctx.command.transform` 注册 | ✓ |
+| `ctx.command.list()` 是否列出注册项 | ✓ 列在 `init/review/odw/ultracode/workflows/...` 同一份清单里（TUI 可见） |
+| `opencode run "/name args"` 是否派发命令 | ✗ **不派发** —— 整串当普通 user prompt 送模型 |
+| `ctx.session.command({ sessionID, name, text })` | ✓ 真的调用到 `execute`，`prompt.text` 就是 `text` |
+| 只改 `invocation.prompt.text`（不自己 enqueue） | ✗ **不会**投递任何东西：命令结束后 session 里 **0 条 user 消息** |
+| `execute` 内自己 `ctx.session.prompt({ sessionID: 自己的会话 })` | ✓ 投递成功（`user` 消息入库），且**模型真的按新 prompt 回答** |
+
+> 结论：`/workflow` 必须是「注册命令 + 在 `execute` 里**显式** `session.prompt` 自己那条 prompt」。改 `prompt.text` 只是"能改"，不代表"会被送出去"。
+> 另外 `opencode run` 不走命令派发，所以「无 TUI 的真机验证」只能用 `session.command`（或 TUI）触发。
+
+### 3.8 hook 改写是否真到达模型（C9d/C9e）
+
+在独立会话里发带哨兵词的 prompt，跑完后从 `session.context()` 读回 `user` 消息：
+
+| 观察 | 值 |
+|---|---|
+| `SessionMessageUser` 的文本字段 | **顶层 `text`**（不是 `payload.text`；`payload.text` 是 `session.prompt()` 的**返回值**/inbox item 形状） |
+| hook 追加的 marker 是否在入库的 user 消息里 | ✓ 出现 **1** 次 |
+| 模型是否照 hook 注入的指令回答 | ✓ 回复 `done HOOKOK` |
+
+> 这条把「hook 只碰 text、且改写确实进入模型输入」钉死了。
+
 ## 4. 负向控制
 
 把探针里 C7 的 `await Promise.all([wait, wait])` 改成 `await Promise.all([])`，重跑：
@@ -145,6 +176,8 @@ FAIL  C7b   both workers produced text
 
 其余 38 项保持绿色 —— 断言确实绑在真实行为上，不是恒真。
 
+> 另外也踩过一次**假绿以外**的反面：探针默认挑 `model.list()` 里的第一个模型，而它是免费额度模型；额度耗尽后所有模型相关断言集体变红（`C7b`、`C9d`、`C9e` 全挂，报 `provider.quota`）。现在 harness 固定用 `compass/deepseek-v4.1-flash`（可用 `ODW_PROBE_MODEL` 覆盖）。**契约测试不能依赖免费额度。**
+
 ## 5. 发现并已回写进 PLAN 的修正
 
 | 编号 | 原判断 | 实测 |
@@ -155,3 +188,7 @@ FAIL  C7b   both workers produced text
 | C14 | `SessionInfo.model` 与传入的 `Model.Ref` 一致 | 回显会补 `variant: "default"` |
 | C15 | `ctx.session` 的成员集合以文档为准 | 实际多出 `generate, compact, interrupt, move, switchAgent, switchModel` |
 | C16 | — | 免费额度下 `ctx.generate.text` 抛 `Generate.UnavailableError`，**ODW 不得依赖它** |
+| C17 | 命令只改 `prompt.text` 就能影响模型输入 | **不投递**；`execute` 必须自己 `ctx.session.prompt` |
+| C18 | `opencode run "/cmd args"` 会走命令派发 | **不会**；命令只能由 TUI / `session.command` 触发 |
+| C19 | user 消息文本在 `payload.text` | `SessionMessageUser` 是顶层 `text` |
+| C20 | 沙箱需要注入宿主的 `JSON/Math/Date` 并冻结 | 沙箱自带自己 realm 的内置对象，注入宿主对象只会引入跨 realm 混淆；只注入 `console` + 原语 |
