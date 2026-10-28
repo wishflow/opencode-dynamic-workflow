@@ -1,5 +1,5 @@
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 /**
  * Run artifacts on disk: `script.ts`, `meta.json`, `journal.jsonl`, `result.json`
@@ -25,6 +25,10 @@ export function createRunArtifacts(root: string, runId: string): RunArtifacts {
     runId,
     write(name, content) {
       const path = join(dir, name)
+      // Names may carry a subdirectory (`checkpoints/001-x.json`), so the parent
+      // is created on demand rather than requiring every caller to pre-declare a
+      // layout.
+      mkdirSync(dirname(path), { recursive: true })
       writeFileSync(path, content)
       return path
     },

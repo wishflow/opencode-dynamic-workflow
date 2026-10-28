@@ -86,6 +86,52 @@ export type ParallelOptions = {
   concurrency?: number
 }
 
+/**
+ * One stage of a `ctx.pipeline`.
+ *
+ * `input` is the previous stage's value (the item itself for the first stage),
+ * `item` is the original element and `index` its position - the item is passed
+ * alongside the running value so a later stage can still frame itself ("review
+ * this summary, of file Y") without the script threading context by hand.
+ */
+export type PipelineStage = (input: unknown, item: unknown, index: number) => unknown
+
+export type LoopOptions<S = unknown> = {
+  /** Hard iteration cap. Required: an uncapped loop is not expressible. */
+  max: number
+  body: (state: S, iteration: number) => S | Promise<S>
+  /** Checked after each body run; returning true stops the loop. */
+  until?: (state: S, iteration: number) => boolean
+  /** Starting state. Defaults to `undefined`. */
+  initial?: S
+}
+
+export type LoopState<S = unknown> = {
+  iterations: number
+  state: S
+  stopped: "until" | "max"
+}
+
+export type VerifyOptions = {
+  /** The claim to falsify. Required, non-empty. */
+  claim: string
+  /** Untrusted hint (paths, output) the verifier should still check itself. */
+  evidence?: string
+  label?: string
+  agent?: string
+  model?: string
+  /** Defaults to `"read-only"`: a verifier that can edit is not a verifier. */
+  permissions?: PermissionSpec
+  timeoutMs?: number
+}
+
+export type VerifyResult = {
+  pass: boolean
+  reasons: string[]
+  /** Verifier's raw reply, when it was not parseable as the verdict schema. */
+  raw?: string
+}
+
 export type BudgetSnapshot = {
   workers: number
   cost: number
@@ -104,6 +150,13 @@ export type RunContext = {
     fn: (item: T, index: number) => Promise<R> | R,
     options?: ParallelOptions,
   ): Promise<R[]>
+  pipeline<T, R = unknown>(items: readonly T[], ...stages: readonly PipelineStage[]): Promise<R[]>
+  loop<S = unknown>(options: LoopOptions<S>): Promise<LoopState<S>>
+  verify(claim: string | VerifyOptions): Promise<VerifyResult>
+  /** Persists a named marker (journal entry + `checkpoints/NNN-<label>.json`). */
+  checkpoint(label: string, data?: unknown): Promise<void>
+  /** Stops the run deliberately. Always throws. */
+  abort(reason?: string): never
   log(...args: unknown[]): void
   phase(name: string): void
   budget(): BudgetSnapshot
@@ -119,6 +172,7 @@ export type ScriptErrorKind =
   | "aborted"
   | "budget"
   | "worker-limit"
+  | "step-limit"
   | "worker-failed"
   | "bad-args"
   | "not-implemented"
@@ -187,6 +241,12 @@ export class BudgetExceededError extends OdwError {
 export class WorkerLimitError extends OdwError {
   constructor(message: string) {
     super("worker-limit", message)
+  }
+}
+
+export class StepLimitError extends OdwError {
+  constructor(message: string) {
+    super("step-limit", message)
   }
 }
 

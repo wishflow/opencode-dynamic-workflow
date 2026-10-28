@@ -22,6 +22,7 @@ import { assertNoModelCall } from "../plugin/guard.ts"
 import { Budget } from "./budget.ts"
 import { Deadline } from "./deadline.ts"
 import { Journal } from "./journal.ts"
+import { DEFAULT_MAX_STEPS, Steps } from "./steps.ts"
 import { Semaphore } from "./semaphore.ts"
 import { runAgenticWorker, type WorkerDeps, type WorkerEvent } from "../worker/agentic.ts"
 
@@ -30,6 +31,7 @@ export const DEFAULTS = {
   maxConcurrency: 10,
   timeoutMs: 600_000,
   maxWorkers: 50,
+  maxSteps: DEFAULT_MAX_STEPS,
   keepRuns: 50,
   progressIntervalMs: 500,
 } as const
@@ -119,10 +121,13 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
 
   const budget = new Budget(input.budgetUsd)
   const deadline = Deadline.after(timeoutMs)
+  const steps = new Steps(DEFAULTS.maxSteps)
   const workerSemaphore = new Semaphore(concurrency)
   const startedAt = Date.now()
 
   const progress = createProgressChannel(deps)
+  let checkpoints = 0
+  const checkpointNames: string[] = []
 
   // Cancellation has three sources (caller abort, wall-clock timeout, deadline
   // inside a primitive) and one destination: every worker session gets interrupted.
@@ -179,6 +184,7 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
     worker: boundWorkerDeps,
     deadline,
     budget,
+    steps,
     concurrency,
     log: (message) => {
       journal.append({ type: "log", message })
@@ -191,6 +197,30 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
       void deps.ctx.session
         .synthetic({ sessionID: deps.sessionID, text: `[odw ${runId}] ▸ ${name}` })
         .catch(() => undefined)
+    },
+    checkpoint: (label, data) => {
+      checkpoints += 1
+      // The label is script-authored, so it is sanitised before it becomes a file
+      // name: `"../../x"` must not be able to escape the run directory.
+      const safe = sanitizeLabel(label)
+      const name = `checkpoints/${String(checkpoints).padStart(3, "0")}-${safe}.json`
+      const entry = { runId, label, at: new Date().toISOString(), data: data ?? null }
+      let path: string
+      let dataBytes: number | null = null
+      try {
+        const serialized = JSON.stringify(entry, null, 2)
+        dataBytes = serialized.length
+        path = artifacts.write(name, `${serialized}\n`)
+      } catch {
+        // A circular or otherwise unserialisable payload must not fail the run;
+        // the marker itself is the durable part.
+        path = artifacts.write(name, `${JSON.stringify({ runId, label, at: new Date().toISOString(), data: null, dataUnserializable: true }, null, 2)}\n`)
+      }
+      checkpointNames.push(path)
+      journal.append({ type: "checkpoint", label, path, dataBytes, workers: budget.workers, cost: budget.cost })
+      // Never synthetic: a script may legitimately checkpoint often, and the file
+      // plus journal entry is what makes it durable - not a chat line.
+      progress.emit({ phase: "checkpoint", label, workers: budget.workers, cost: budget.cost }, false)
     },
   })
 
@@ -218,6 +248,8 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
     status: scriptResult.status,
     elapsedMs,
     workers: { started: workersStarted, settled: workerEvents.length, failed: failed.length },
+    steps: { used: steps.count, limit: steps.limit },
+    checkpoints: checkpointNames,
     cost: snapshot.cost,
     tokens: snapshot.tokens,
     artifactsDir: artifacts.dir,
@@ -260,6 +292,8 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
     elapsedMs,
     started: workersStarted,
     failed: failed.length,
+    stepsUsed: steps.count,
+    checkpoints: checkpoints,
     cost: snapshot.cost,
     error: scriptResult.status === "error" ? scriptResult.error : null,
   })
@@ -287,7 +321,14 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
 
 type ScriptSource = { source: string; origin: { kind: "inline" } | { kind: "file"; path: string } }
 
-function resolveScriptSource(input: RunWorkflowInput, directory: string): ScriptSource {
+export type { ScriptSource }
+
+/**
+ * Resolves `script` (inline) or `file` (inside `<project>/workflows/`) to source
+ * text. Exported because `odw_plan` must run the *identical* resolution the run
+ * would, or the dry run would validate a different script than the one executed.
+ */
+export function resolveScriptSource(input: RunWorkflowInput, directory: string): ScriptSource {
   const inline = typeof input.script === "string" ? input.script.trim() : ""
   if (inline !== "") return { source: inline, origin: { kind: "inline" } }
 
@@ -446,7 +487,14 @@ type Inventory = {
   knownModels: ReadonlySet<string> | null
 }
 
-async function loadInventory(deps: RunWorkflowDeps): Promise<Inventory> {
+export type { Inventory }
+
+/**
+ * Reads session defaults plus the agent/model inventories. Exported because
+ * `odw_plan` must validate against the *same* inventory the run will use -
+ * a second implementation would drift.
+ */
+export async function loadInventory(deps: RunWorkflowDeps): Promise<Inventory> {
   let model: ModelRef | null = null
   let agent: string | null = null
   try {
@@ -537,6 +585,16 @@ function resolveRunId(input: string | undefined): string {
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min
   return Math.max(min, Math.min(max, Math.floor(value)))
+}
+
+/**
+ * Turns a script-authored checkpoint label into a file-name fragment. Everything
+ * outside `[A-Za-z0-9._-]` collapses to `_`, so `"../../etc/passwd"` becomes
+ * `.._.._etc_passwd` and cannot leave the run directory.
+ */
+function sanitizeLabel(label: string): string {
+  const cleaned = label.trim().replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._]+/, "")
+  return (cleaned === "" ? "checkpoint" : cleaned).slice(0, 64)
 }
 
 /* ------------------------------------------------------------------ *

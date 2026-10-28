@@ -1,11 +1,12 @@
 /**
- * The documentation the model reads: it is the `odw_run` tool description verbatim.
+ * The documentation the model reads: it is the `odw_run` / `odw_plan` tool
+ * description verbatim.
  *
  * Rules for this file (it is prompt, not comments):
- *  - document ONLY what M2 actually implements - an undocumented-but-mentioned
- *    primitive is worse than a missing one, because the model will call it;
+ *  - document ONLY what actually exists - an undocumented-but-mentioned primitive
+ *    is worse than a missing one, because the model will call it;
  *  - show the exact `ctx` surface, since the sandbox offers nothing else;
- *  - keep the cost/latency warning loud, because every primitive call is a real
+ *  - keep the cost/latency warning loud, because every `ctx.agent` call is a real
  *    model turn on the user's account.
  */
 
@@ -15,7 +16,7 @@ export const RUN_CONTEXT_SIGNATURE = `type RunContext = {
     label?: string                 // shown in progress + artifacts
     agent?: string                 // opencode agent id, e.g. "explore" | "build"
     model?: string                 // "provider/model" or "provider/model#variant"
-    mode?: "agentic" | "oneshot"   // default "agentic"
+    mode?: "agentic" | "oneshot"   // oneshot is not implemented yet
     permissions?: "inherit" | "read-only" | "dangerous-full-access"
     schema?: object                // JSON Schema; the reply is parsed as JSON
     timeoutMs?: number             // per-worker wall clock
@@ -27,16 +28,34 @@ export const RUN_CONTEXT_SIGNATURE = `type RunContext = {
     o?: { concurrency?: number }   // max items in flight, clamped to the run's concurrency
   ): Promise<R[]>
 
-  log(...args: unknown[]): void
+  pipeline<T, R = unknown>(
+    items: T[],
+    ...stages: Array<(input, item, i) => unknown>   // input = previous stage's value
+  ): Promise<R[]>                  // stages run in order per item; items run concurrently
+
+  loop<S = unknown>(o: {
+    max: number                                      // required hard cap
+    body: (state: S, i: number) => S | Promise<S>
+    until?: (state: S, i: number) => boolean         // checked after each body run
+    initial?: S
+  }): Promise<{ iterations: number; state: S; stopped: "until" | "max" }>
+
+  verify(claim: string | {
+    claim: string
+    evidence?: string              // untrusted hint; the verifier still checks it
+    label?: string; agent?: string; model?: string
+    permissions?: object | string  // default "read-only"
+    timeoutMs?: number
+  }): Promise<{ pass: boolean; reasons: string[] }>
+
+  checkpoint(label: string, data?: unknown): Promise<void>   // durable marker
+  abort(reason?: string): never                               // stop the run on purpose
   phase(name: string): void
+  log(...args: unknown[]): void
   budget(): { workers: number; cost: number; tokens: TokenTotals; limitUsd: number | null }
 }`
 
-export const ODW_RUN_DOC = `Run an opencode-dynamic-workflow script: a small JavaScript/TypeScript program that orchestrates opencode sub-sessions ("workers") deterministically.
-
-WHY: when a task is "do the same thing to N items", "fan out and combine", or "loop until it passes", doing it turn-by-turn in one conversation is slow, serial and non-reproducible. Write the plan as a script and the plugin executes it: it controls concurrency, budget and cancellation, and it records every worker's transcript under this session.
-
-## The script
+const HOW_IT_WORKS = `## The script
 
 The script must be a single expression evaluating to an async function of \`ctx\`. Preferred form:
 
@@ -65,25 +84,84 @@ ${RUN_CONTEXT_SIGNATURE}
 - \`ctx.agent\` creates a real sub-session (visible in the session tree under this
   one), sends the prompt, waits for it to settle, and returns the reply text - or
   the parsed JSON when \`schema\` is set. **A failed worker throws**, which aborts
-  the script; there is no automatic retry, so retry deliberately with a loop if
-  the task needs it.
+  the script; there is no automatic retry, so retry deliberately with \`ctx.loop\`
+  if the task needs it.
 - \`ctx.parallel\` runs \`fn\` for every item with bounded concurrency and resolves to
   the results in **input order**. The first rejection stops new items from being
   dispatched, then the error is thrown.
+- \`ctx.pipeline\` is \`parallel\` where each item also runs a chain of stages in
+  order, each stage receiving the previous stage's value (\`(input, item, i)\`).
+  It returns the **last** stage's value per item, in input order. Use it for
+  "summarise each file, then review each summary" without nesting calls.
+- \`ctx.loop\` runs \`body\` up to \`max\` times and stops early when \`until\` returns
+  true. \`max\` is mandatory. It returns \`{iterations, state, stopped}\`.
+- \`ctx.verify\` asks a **read-only** worker to falsify \`claim\` and returns
+  \`{pass, reasons}\` - a boolean to branch on, not a paragraph to interpret. It
+  **fails closed**: a claim the verifier could not confirm is \`pass: false\`. Use it
+  before reporting work as done.
+- \`ctx.checkpoint(label, data?)\` writes a durable marker (journal entry plus a
+  file under the run's \`checkpoints/\`). Use it to record a decision worth keeping.
+- \`ctx.abort(reason?)\` ends the run deliberately, with your reason.
 - \`ctx.phase\` marks progress. \`ctx.log\` records a line. Both are visible to the user.
 - \`ctx.budget()\` reports what has been spent so far.
 
 ## Cost and limits
 
-Every \`ctx.agent\` call is a real model turn on the user's account. A \`parallel\` over
-50 items is 50 model turns. Prefer a few substantial workers over many tiny ones.
-Runs are capped by \`concurrency\`, \`maxWorkers\`, \`budgetUsd\` and \`timeoutMs\`; when a
-cap is hit the run stops with an error naming the cap.
+Every \`ctx.agent\` and \`ctx.verify\` call is a real model turn on the user's account.
+A \`parallel\` over 50 items is 50 model turns. Prefer a few substantial workers over
+many tiny ones.
 
-## Parameters
+Runs are capped by \`concurrency\`, \`maxWorkers\`, \`budgetUsd\`, \`timeoutMs\` and the
+primitive step budget (500 calls). When a cap is hit the run stops with an error
+naming the cap.`
+
+const PARAMETERS = `## Parameters
 
 - \`script\` - inline source (preferred while iterating).
 - \`file\` - path to a script, relative to \`<project>/workflows/\`.
 Everything else is optional: \`runId\`, \`concurrency\` (default 4, max 10),
 \`timeoutMs\` (default 600000), \`budgetUsd\`, \`maxWorkers\` (default 50).
+
+## Workflow
+
+1. \`odw_plan\` first - it compiles the script and checks literal \`agent\`/\`model\`/
+   \`mode\`/\`permissions\` against the live inventory, for free.
+2. \`odw_run\` to execute.
+3. On failure, read \`kind\` + \`message\` + the artifacts directory, fix the script,
+   and run again. Do not assume the first version succeeds.`
+
+export const ODW_RUN_DOC = `Run an opencode-dynamic-workflow script: a small JavaScript/TypeScript program that orchestrates opencode sub-sessions ("workers") deterministically.
+
+WHY: when a task is "do the same thing to N items", "fan out and combine", or "loop until it passes", doing it turn-by-turn in one conversation is slow, serial and non-reproducible. Write the plan as a script and the plugin executes it: it controls concurrency, budget and cancellation, and it records every worker's transcript under this session.
+
+${HOW_IT_WORKS}
+
+${PARAMETERS}
+`
+
+export const ODW_PLAN_DOC = `Dry-run an opencode-dynamic-workflow script. Compiles it, checks its arguments against the live agent/model inventory, and reports what it would do - **without creating a single worker and without spending anything**.
+
+Use this before \`odw_run\` whenever the script is non-trivial. It is the cheap place to catch a mistyped \`agent\`/\`model\` (the most common failure, and an expensive one: a bad name is only discovered after the run has already started), an unimplemented \`mode\`, or a bad \`permissions\` value.
+
+## What it checks
+
+- resolves \`script\`/\`file\` exactly as \`odw_run\` would, and **compiles** it (syntax only);
+- validates \`concurrency\` / \`timeoutMs\` / \`maxWorkers\` / \`budgetUsd\`;
+- reads every **string literal** \`agent\` / \`model\` / \`mode\` / \`permissions\` in
+  \`ctx.agent({...})\` and \`ctx.verify({...})\` call sites and checks it against the
+  inventory the run will actually use;
+- reports the session defaults and available agents/models.
+
+## What it cannot check (and says so)
+
+- the script is **not executed** and its body is **not invoked**: there is no
+  simulation, so runtime failures, wrong logic and wrong worker counts stay hidden;
+- non-literal arguments (\`agent: someVar\`, calls built inside \`parallel\`/\`loop\`)
+  are reported as \`dynamic\` and never guessed at, so the real worker count of a
+  fan-out is not predictable here;
+- it cannot see what a worker will do.
+
+A passing plan is not a promise that the run succeeds.
+
+${PARAMETERS}
 `

@@ -1,15 +1,16 @@
 import type { Plugin } from "@opencode/plugin"
 
-import { ODW_RUN_DOC } from "../script/api-doc.ts"
+import { ODW_PLAN_DOC, ODW_RUN_DOC } from "../script/api-doc.ts"
+import { planWorkflow } from "../script/plan.ts"
 import { runWorkflow, type RunWorkflowInput } from "../runner/runner.ts"
 import { OdwError } from "../types.ts"
 
 /**
  * The model-facing tool surface.
  *
- * Two tools only: `odw_ping` (liveness) and `odw_run` (execution). Everything a
- * workflow can do is inside the script, not in extra tools - a growing tool list
- * would be a second, weaker scripting language.
+ * Three tools: `odw_ping` (liveness), `odw_plan` (free dry run) and `odw_run`
+ * (execution). Everything a workflow can do is inside the script, not in extra
+ * tools - a growing tool list would be a second, weaker scripting language.
  */
 export async function registerTools(ctx: Plugin.Context): Promise<() => Promise<void>> {
   const registration = await ctx.tool.transform((editor) => {
@@ -36,38 +37,24 @@ export async function registerTools(ctx: Plugin.Context): Promise<() => Promise<
     })
 
     editor.add({
+      name: "plan",
+      description: ODW_PLAN_DOC,
+      options: { namespace: "odw", codemode: true },
+      input: RUN_INPUT_SCHEMA,
+      execute: async (input: unknown, context) => {
+        const result = await planWorkflow(
+          { ctx, sessionID: context.sessionID, directory: ctx.location.directory },
+          parseRunInput(input),
+        )
+        return { content: result.humanSummary, metadata: result.metadata }
+      },
+    })
+
+    editor.add({
       name: "run",
       description: ODW_RUN_DOC,
       options: { namespace: "odw", codemode: true },
-      input: {
-        type: "object",
-        properties: {
-          script: {
-            type: "string",
-            description:
-              "Inline workflow source: an expression evaluating to `async (ctx) => {...}`. Preferred while iterating.",
-          },
-          file: {
-            type: "string",
-            description: "Path to a workflow script. Relative paths resolve inside `<project>/workflows/`.",
-          },
-          runId: { type: "string", description: "Optional run id ([A-Za-z0-9._-], 1..64)." },
-          concurrency: {
-            type: "integer",
-            minimum: 1,
-            maximum: 10,
-            description: "Max worker sessions in flight. Default 4.",
-          },
-          timeoutMs: {
-            type: "integer",
-            minimum: 1000,
-            description: "Wall-clock budget for the whole script. Default 600000.",
-          },
-          budgetUsd: { type: "number", description: "Stop starting new workers once spend exceeds this." },
-          maxWorkers: { type: "integer", minimum: 1, description: "Hard cap on worker sessions. Default 50." },
-        },
-        additionalProperties: false,
-      },
+      input: RUN_INPUT_SCHEMA,
       execute: async (input: unknown, context) => {
         const result = await runWorkflow(
           {
@@ -86,6 +73,40 @@ export async function registerTools(ctx: Plugin.Context): Promise<() => Promise<
 
   return () => registration.dispose()
 }
+
+/**
+ * `odw_plan` and `odw_run` take the same input on purpose: a plan that validated
+ * a different call than the one that runs would be worse than no plan.
+ */
+const RUN_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    script: {
+      type: "string",
+      description:
+        "Inline workflow source: an expression evaluating to `async (ctx) => {...}`. Preferred while iterating.",
+    },
+    file: {
+      type: "string",
+      description: "Path to a workflow script. Relative paths resolve inside `<project>/workflows/`.",
+    },
+    runId: { type: "string", description: "Optional run id ([A-Za-z0-9._-], 1..64)." },
+    concurrency: {
+      type: "integer",
+      minimum: 1,
+      maximum: 10,
+      description: "Max worker sessions in flight. Default 4.",
+    },
+    timeoutMs: {
+      type: "integer",
+      minimum: 1000,
+      description: "Wall-clock budget for the whole script. Default 600000.",
+    },
+    budgetUsd: { type: "number", description: "Stop starting new workers once spend exceeds this." },
+    maxWorkers: { type: "integer", minimum: 1, description: "Hard cap on worker sessions. Default 50." },
+  },
+  additionalProperties: false,
+} as const
 
 /**
  * Tool input is untrusted JSON: the JSON Schema above is declarative metadata, not

@@ -29,6 +29,7 @@ export function createAgentPrimitive(deps: PrimitiveDeps) {
     }
 
     sequence += 1
+    deps.steps.claim("ctx.agent")
     const outcome = await runAgenticWorker(deps.worker, {
       ...options,
       label: options.label ?? `agent-${sequence}`,

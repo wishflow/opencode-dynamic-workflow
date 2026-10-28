@@ -36,6 +36,7 @@ export function createParallelPrimitive(deps: PrimitiveDeps) {
 
     const requested = options?.concurrency ?? deps.concurrency
     const limit = Math.max(1, Math.min(Math.floor(requested), deps.concurrency))
+    deps.steps.claim("ctx.parallel")
     const results = new Array<R>(items.length)
     const failures: unknown[] = []
     let stopped = false
