@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+*.log
+
+# Local workflow run artifacts
+.opencode/odw/
