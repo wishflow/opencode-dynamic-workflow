@@ -1,0 +1,175 @@
+/** Assertions over the raw observations written by probe.ts. Shared by run.mjs and the vitest test. */
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
+
+const okOf = (v) => v?.ok === true
+const errOf = (v) => v?.ok === false
+
+/**
+ * @param {{ obs: any, hookLines: any[], logs: string, directory: string }} input
+ * @returns {{ id: string, description: string, ok: boolean, detail?: unknown }[]}
+ */
+export function assertContract({ obs, hookLines, logs, directory }) {
+  const results = []
+  const check = (id, description, ok, detail) => results.push({ id, description, ok: Boolean(ok), detail })
+  const get = (k) => obs[k]
+
+  // C1 - the probe loaded and executed on the host server
+  check("C1a", "probe plugin loaded + tool executed", Boolean(obs["c1-runtime"]), get("c1-runtime"))
+  check(
+    "C1b",
+    "no 'must be a directory' WARN for the probe plugin",
+    !logs.split("\n").some((l) => l.includes("must be a directory") && l.includes("odw-probe")),
+  )
+  check("C1c", "server bound to the throwaway project", String(get("c1-runtime")?.directory ?? "") === directory, {
+    got: get("c1-runtime")?.directory,
+    want: directory,
+  })
+
+  // C2 - ctx surface
+  const domains = get("c2-ctx-domains") ?? {}
+  check("C2a", "all expected ctx domains present", (domains.missing ?? ["?"]).length === 0, {
+    missing: domains.missing,
+    extra: domains.extra,
+  })
+  check(
+    "C2b",
+    "ctx.experimental has NO generate (only terminal)",
+    Array.isArray(domains.experimentalMembers) && !domains.experimentalMembers.includes("generate"),
+    domains.experimentalMembers,
+  )
+  check(
+    "C2c",
+    "ctx.generate.text exists",
+    get("c2-ctx-domains")?.topLevelValueTypes?.generate === "object" && get("c8-oneshot")?.textIsFunction === true,
+    get("c8-oneshot"),
+  )
+
+  // C3 - Model.Ref
+  const ref = get("c3-model-ref") ?? {}
+  check("C3a", "create({providerID,id}) accepted", okOf(ref.goodPair), ref.goodPair)
+  check("C3b", "create({id} only) rejected", errOf(ref.idOnly), ref.idOnly)
+  check("C3c", "create({providerID,modelID}) rejected", errOf(ref.providerIDPlusModelID), ref.providerIDPlusModelID)
+  check("C3d", "Model.Ref.parse('p/m#v') -> providerID/id/variant", okOf(ref.parse) && ref.parse.value?.variant === "high", ref.parse)
+
+  // C4 - create surface
+  const c4 = get("c4-session-shape") ?? {}
+  check("C4a", "create({title}) -> id", okOf(c4.titleOnly) && typeof c4.titleOnly.value?.id === "string", c4.titleOnly)
+  check("C4b", "create({agent:'explore'}) -> agent echoed", c4.withAgent?.agent === "explore", c4.withAgent)
+  check("C4c", "create({permissions:[deny edit]}) accepted", c4.withPermissions?.created === true, c4.withPermissions)
+  check("C4d", "create({parentID}) accepted", c4.withParentID?.id !== undefined, c4.withParentID)
+
+  // C5
+  check("C5", "prompt without `text` rejected", errOf(get("c5-prompt-requires-text")), get("c5-prompt-requires-text"))
+
+  // C6 - the core worker loop
+  const c6 = get("c6-worker-loop") ?? {}
+  check("C6a", "context empty right after prompt", c6.immediatelyAfterPrompt === 0, c6.immediatelyAfterPrompt)
+  check(
+    "C6b",
+    "wait() -> assistant text says 42",
+    typeof c6.summary?.lastAssistantText === "string" && c6.summary.lastAssistantText.includes("42"),
+    c6.summary?.lastAssistantText,
+  )
+  check("C6c", "assistant carries tokens", Boolean(c6.summary?.lastAssistantTokens), c6.summary?.lastAssistantTokens)
+  check("C6d", "round trip produced >=3 messages", c6.summary?.count >= 3, {
+    count: c6.summary?.count,
+    types: c6.summary?.types,
+  })
+
+  // C7 - re-entrancy: the architecture-level gate
+  const c7 = get("c7-reentrancy") ?? {}
+  check("C7a", "2 concurrent workers from inside a tool call", okOf(c7), c7.message)
+  check(
+    "C7b",
+    "both workers produced text",
+    Boolean(c7.value?.first?.lastAssistantText) && Boolean(c7.value?.second?.lastAssistantText),
+    { first: c7.value?.first?.lastAssistantText, second: c7.value?.second?.lastAssistantText },
+  )
+  check("C7c", "finished within 120s", typeof c7.totalMs === "number" && c7.totalMs < 120_000, c7.totalMs)
+
+  // C8 - one-shot generation
+  const c8 = get("c8-oneshot") ?? {}
+  check("C8a", "ctx.generate.text exists and is callable", c8.textIsFunction === true, c8)
+  check("C8b", "ctx.experimental.generate does NOT exist in this build", c8.experimentalGenerateExists === false, {
+    experimentalGenerateExists: c8.experimentalGenerateExists,
+  })
+  check(
+    "C8c",
+    "generate() either succeeds or is a typed UnavailableError (quota), not a shape error",
+    c8.call?.ok === true || c8.unavailableIsTyped === true,
+    c8.call,
+  )
+
+  // C10
+  const c10 = get("c10-permission-update") ?? {}
+  check("C10a", "session.update({permissions}) accepted", okOf(c10.update), c10.update)
+  check("C10b", "deny rule readable back", okOf(c10.readBack) && JSON.stringify(c10.readBack.value ?? {}).includes("deny"), undefined)
+
+  // C11 - node:vm capability gate (the A-tier ScriptHost fence, see PLAN §1/C11)
+  const c11 = get("c11-vm-capabilities") ?? {}
+  check("C11a", "vm.createContext + Script works", okOf(c11.createContext) && c11.createContext.value === 2, c11.createContext)
+  check("C11b", "codeGeneration strings:false blocks eval", errOf(c11.codegenStringsBlocked), c11.codegenStringsBlocked)
+  check("C11c", "runInContext({timeout}) interrupts `while(true)`", errOf(c11.timeoutInterruptsSyncLoop), c11.timeoutInterruptsSyncLoop)
+  check(
+    "C11d",
+    "host can await a vm-realm promise (cross-realm thenable works)",
+    c11.crossRealmPromise?.ok === true && c11.crossRealmPromise.value?.awaitedFromHost === 7,
+    c11.crossRealmPromise,
+  )
+  check(
+    "C11e",
+    "host async fn bridged into the sandbox is awaitable from inside",
+    c11.hostAsyncBridge?.ok === true && c11.hostAsyncBridge.value === 42,
+    c11.hostAsyncBridge,
+  )
+  check(
+    "C11f",
+    "sandbox has no ambient `require` (capability fence holds)",
+    c11.hostModuleReachable?.requireInContext?.ok === true && c11.hostModuleReachable.requireInContext.value === "undefined",
+    c11.hostModuleReachable,
+  )
+
+  // C12 / C13 - feedback channels
+  check("C12a", "tool progress() callable", okOf(get("c12-progress")), get("c12-progress"))
+  check("C12b", "tool context exposes an AbortSignal", get("c12-signal")?.isAbortSignal === true, get("c12-signal"))
+  check("C13", "session.synthetic() callable", okOf(get("c13-synthetic")), get("c13-synthetic"))
+
+  // C9 - prompt hook
+  const injected = hookLines.filter((l) => l.injected === true)
+  check("C9a", "session.hook('prompt') fired", hookLines.length > 0, { hookFirings: hookLines.length })
+  check("C9b", "hook can append text + set metadata", injected.length > 0, injected.slice(0, 2))
+  check(
+    "C9c",
+    "re-entrant hook invocation does not double-append (marker appears once per event)",
+    injected.length > 0 && injected.every((l) => l.injectedCount === 1),
+    injected.map((l) => l.injectedCount),
+  )
+
+  return results
+}
+
+export function loadObservations(outDir) {
+  const obsFile = join(outDir, "all.json")
+  const hookFile = join(outDir, "prompt-hook.jsonl")
+  return {
+    obs: existsSync(obsFile) ? JSON.parse(readFileSync(obsFile, "utf8")) : undefined,
+    hookLines: existsSync(hookFile)
+      ? readFileSync(hookFile, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+      : [],
+  }
+}
+
+export function report(results, obs) {
+  const width = Math.max(...results.map((r) => r.description.length))
+  for (const r of results) console.log(`${r.ok ? "PASS" : "FAIL"}  ${r.id.padEnd(5)} ${r.description.padEnd(width)}`)
+  const failed = results.filter((r) => !r.ok)
+  console.log(`\n${results.length - failed.length}/${results.length} passed`)
+  if (failed.length > 0) {
+    console.log("\n--- failing detail ---")
+    for (const f of failed) console.log(`${f.id}: ${JSON.stringify(f.detail ?? null).slice(0, 700)}`)
+  }
+  return failed
+}
+
+export { okOf, errOf }

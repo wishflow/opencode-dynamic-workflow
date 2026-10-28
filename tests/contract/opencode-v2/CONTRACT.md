@@ -1,0 +1,157 @@
+# opencode v2 契约测试（ODW 的事实基线）
+
+这里不是单测，是**用 opencode 自己跑出来的行为快照**。ODW 的每一个设计决定都建立在这些事实上；一旦 opencode 升级改变了它们，这里必须变红。
+
+被测运行时：
+
+| 项 | 值 |
+|---|---|
+| opencode | `2.1.0`（homebrew `opencode-v2`） |
+| 嵌入式 JS 运行时 | Bun `1.4.2`（`process.versions.node` 报 `26.3.0`） |
+| `@opencode/plugin`（类型包） | `2.2.0`（与运行时存在版本差，已知风险） |
+| 观察日期 | 2026-10-28 |
+
+## 1. 怎么跑
+
+```bash
+# 全量：真起 opencode，真跑 worker 会话（约 1~2 分钟）
+node tests/contract/opencode-v2/run.mjs
+
+# 保留现场（临时项目 + 原始观察 JSON + 日志）
+node tests/contract/opencode-v2/run.mjs --keep
+
+# 只跑不断言，打印原始观察
+node tests/contract/opencode-v2/run.mjs --no-assert
+
+# 复用上一次的现场重新断言（改断言时用，不重跑 opencode）
+node tests/contract/opencode-v2/run.mjs --reuse <上一次的项目目录>
+
+# 经 vitest（默认 skip，需显式开启）
+ODW_CONTRACT=1 npx vitest run tests/contract
+```
+
+失败时退出码非 0，并打印失败项与原始观察。
+
+## 2. 隔离规则（必须遵守）
+
+| 规则 | 原因 |
+|---|---|
+| 只在 `mkdtemp()` 出来的临时 git 项目里跑 | 插件按 location 加载；非 git 目录拿不到 `location.project.id` |
+| **绝不写** `~/.config/opencode/` | `OPENCODE_CONFIG_DIR` **不隔离**全局配置（PLAN §1 C9），用户真实配置始终被读取 |
+| `spawnSync` 必须显式设 `PWD=<临时项目>` | opencode 用 `PWD` 而不是子进程 `cwd` 解析 location；只设 `cwd` 会**静默绑到调用者所在项目**（M1 踩过，断言 C1c 就是钉这个的） |
+| 探针插件只通过 `.opencode/plugins/odw-probe/index.ts` 一行 re-export 挂载 | 配置 `plugins: [...]` 在本版本对本地目录不生效（PLAN §1 C8） |
+
+## 3. 观察结果
+
+`39/39` 通过（`run.mjs` 末行）。关键事实如下。
+
+### 3.1 契约面（C1–C5）
+
+| 项 | 观察 |
+|---|---|
+| `ctx` 顶层域 | 期望的 26 个域**全部存在**，无缺失、无多余 |
+| `ctx.session` 成员 | `command, compact, context, create, generate, get, hook, interrupt, list, move, prompt, remove, switchAgent, switchModel, synthetic, update, wait` |
+| `ctx.experimental` 成员 | **只有 `terminal`** —— **没有 `generate`** |
+| `ctx.generate` 成员 | 只有 `text` |
+| `ctx.model.list()` | 返回 **`{ data, location }` 包装对象**（不是数组），本次 41 个模型 |
+| `ctx.agent.list()` | 同样返回 **`{ data, location }`**，7 个 agent：`build, general, explore, compaction, title, summary, plan` |
+| agent 条目字段 | `description, hidden, id, mode, name, permissions, request` |
+| `Model.Ref` | `{ providerID, id, variant? }` |
+| `Model.Ref.parse("compass/some-model#high")` | → `{ providerID: "compass", id: "some-model", variant: "high" }` |
+| `session.create({ id })` | ✗ `SchemaError`：`Missing key at ["model"]["providerID"]` |
+| `session.create({ providerID, modelID })` | ✗ `SchemaError`：`Missing key at ["model"]["id"]` |
+| `SessionInfo.model` 回显 | `{ id, providerID, variant: "default" }` —— `variant` 默认补 `"default"` |
+| `session.create({ agent: "explore" })` | ✓ 回显 `agent: "explore"` |
+| `session.create({ permissions: [{ action:"edit", resource:"*", effect:"deny" }] })` | ✓ 且 `session.get` 能读回同一份规则 |
+| `session.create({ parentID })` | ✓ 回显 `parentID` |
+| `session.prompt({ sessionID, parts:[...] })` | ✗ `SchemaError`：`Missing key at ["text"]` —— **`text` 是必填** |
+| `session.update({ permissions })` | ✓，`get` 读回 `[{action,resource,effect}]` |
+
+### 3.2 worker 循环（C6）—— ODW 的心脏
+
+```
+create → context() 给 [] → prompt() → context() 仍是 0 条 → wait() → context() 拿到 assistant
+```
+
+| 观察 | 值 |
+|---|---|
+| `context()` 在任何 prompt 之前 | `[]` |
+| `context()` 在 `prompt()` 返回后立刻 | **0 条消息**（`prompt` 只入队，不等结果） |
+| `wait()` 返回后消息序列 | `user, assistant, idle` |
+| `idle.outcome` | `"succeeded"` |
+| assistant 携带 | `tokens{input,output,reasoning,cache{read,write}}`、`cost`、`model`、`finish:"stop"`、`content[{type:"text"}]` |
+| 单次往返耗时（免费模型） | ≈ 2.7 s |
+
+> 注意 `cache.read` 会出现非 0（本次 256），ODW 的预算统计不能只加 `input`。
+
+### 3.3 可重入性（C7）—— 架构级闸门
+
+从**一次工具调用内部**并发起 2 个 worker，`Promise.all` 一起等：
+
+| 观察 | 值 |
+|---|---|
+| 结果 | ✓ 两个 worker 各自产出正确文本（`alpha` / `beta`） |
+| 总耗时 | ≈ 2.3 s（并发，不是串行相加） |
+
+这条过了，ODW 的 `agent`/`parallel`/`pipeline` 才成立。
+
+### 3.4 一次性生成（C8）
+
+| 观察 | 值 |
+|---|---|
+| `ctx.experimental.generate` | **不存在**（`TypeError: undefined is not an object`）→ 计划里「改用 `experimental.generate`」的判断是错的 |
+| `ctx.generate.text` | 存在且是函数；免费额度下抛 `Generate.UnavailableError`（"Free usage limit reached"） |
+| `ctx.session.generate` | 是函数（形状未进一步探明） |
+
+> 结论：**ODW 不得依赖 `ctx.generate.text`**（免费/无额度环境直接不可用）。所有"再问一次模型"都走 worker 会话。
+
+### 3.5 node:vm capability fence（C11）—— A 档 ScriptHost 的可行性
+
+| 能力 | 结果 |
+|---|---|
+| `vm.createContext` + `new vm.Script(...).runInContext` | ✓ |
+| `codeGeneration: { strings: false }` 挡住 `eval` | ✓ `EvalError: Code generation from strings disallowed for this context` |
+| `runInContext(ctx, { timeout })` 中断 `while(true)` | ✓ `Error: Script execution timed out after 300ms` |
+| 宿主 `await` 沙箱内产生的 Promise | ✓ 拿到值（跨 realm thenable 可用） |
+| 沙箱内 `x instanceof Promise`（跨 realm） | ✗ **`false`** —— 不能跨 realm 做 `instanceof` 判断 |
+| 宿主 async 函数传进沙箱、在沙箱内 await | ✓ 返回正确结果（`42`） |
+| 沙箱内 `typeof require` | `"undefined"` —— 无 ambient 模块访问 |
+
+> 结论：A 档可行，且「把原语作为 async 函数注入 sandbox」这条桥是通的。实现时要避开跨 realm `instanceof`。
+
+### 3.6 反馈通道（C12 / C13 / C9）
+
+| 通道 | 观察 |
+|---|---|
+| `toolContext.progress({...})` | ✓ 可调用 |
+| `toolContext.signal` | 是 `AbortSignal`，未中止 |
+| `ctx.session.synthetic({ sessionID, text })` | ✓ 返回 `{ type: "synthetic", payload:{text}, delivery:"steer" }` |
+| `ctx.session.hook("prompt", cb)` | ✓ 触发；event 字段 `delivery, messageID, metadata, prompt, sessionID` |
+| `event.prompt` 字段 | `agents, files, skills, text` |
+| `event.delivery` | `"steer"` |
+| 修改 `event.prompt.text` + `event.metadata` | ✓ 生效 |
+| 同一 event 重复触发时 marker 出现次数 | 1（探针自带幂等守卫） |
+
+> `event.prompt` 里还有 `files`/`skills`/`agents`，ODW 的 prompt hook 只碰 `text`，其余原样保留。
+
+## 4. 负向控制
+
+把探针里 C7 的 `await Promise.all([wait, wait])` 改成 `await Promise.all([])`，重跑：
+
+```
+FAIL  C7b   both workers produced text
+38/39 passed
+```
+
+其余 38 项保持绿色 —— 断言确实绑在真实行为上，不是恒真。
+
+## 5. 发现并已回写进 PLAN 的修正
+
+| 编号 | 原判断 | 实测 |
+|---|---|---|
+| C11 | 用 `ctx.experimental.generate.text` 替代 deprecated 的 `ctx.generate.text` | `ctx.experimental` 只有 `terminal`，**没有 `generate`**；只能继续用 `ctx.generate.text`，且它受额度限制 |
+| C12 | `ctx.model.list()` / `ctx.agent.list()` 返回数组 | 返回 `{ data, location }` 包装对象 |
+| C13 | 测试隔离靠 `cwd` / `OPENCODE_CONFIG_DIR` | location 由 **`PWD`** 解析；`OPENCODE_CONFIG_DIR` 不隔离全局配置 |
+| C14 | `SessionInfo.model` 与传入的 `Model.Ref` 一致 | 回显会补 `variant: "default"` |
+| C15 | `ctx.session` 的成员集合以文档为准 | 实际多出 `generate, compact, interrupt, move, switchAgent, switchModel` |
+| C16 | — | 免费额度下 `ctx.generate.text` 抛 `Generate.UnavailableError`，**ODW 不得依赖它** |
