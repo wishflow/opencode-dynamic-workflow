@@ -24,7 +24,7 @@ import { Deadline } from "./deadline.ts"
 import { Journal } from "./journal.ts"
 import { DEFAULT_MAX_STEPS, Steps } from "./steps.ts"
 import { Semaphore } from "./semaphore.ts"
-import { runAgenticWorker, type WorkerDeps, type WorkerEvent } from "../worker/agentic.ts"
+import { runWorker, type WorkerDeps, type WorkerEvent } from "../worker/agentic.ts"
 
 export const DEFAULTS = {
   concurrency: 4,
@@ -155,9 +155,10 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
     maxWorkers,
     knownAgents: null,
     knownModels: null,
+    modelVariants: null,
     claimWorker: () => {
       // The check comes before the increment for the same reason validation does in
-      // `runAgenticWorker`: a refused worker never started, so it must not appear in
+      // `runWorker`: a refused worker never started, so it must not appear in
       // the run's worker count/summary.
       if (workersStarted + 1 > maxWorkers) {
         throw new WorkerLimitError(`已达到 maxWorkers=${maxWorkers}：本次运行不会再启动新的 worker`)
@@ -170,7 +171,7 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
 
   // Inventory + session defaults are ordinary (non-model) API calls. They are
   // best-effort: a read failure only costs the fast-fail typo check.
-  const { defaults, knownAgents, knownModels } = await loadInventory(deps)
+  const { defaults, knownAgents, knownModels, modelVariants } = await loadInventory(deps)
 
   const boundWorkerDeps: WorkerDeps = {
     ...workerDeps,
@@ -178,6 +179,7 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
     defaultAgent: defaults.agent,
     knownAgents,
     knownModels,
+    modelVariants,
   }
 
   const runContext = createRunContext({
@@ -457,6 +459,7 @@ function handleWorkerEvent(
         queued: event.queued,
         agent: event.agent,
         model: event.model,
+        mode: event.mode,
         permissions: event.permissions,
       },
       false,
@@ -485,6 +488,8 @@ type Inventory = {
   defaults: { model: ModelRef | null; agent: string | null }
   knownAgents: ReadonlySet<string> | null
   knownModels: ReadonlySet<string> | null
+  /** `"provider/model"` -> variant ids the host reports for it. */
+  modelVariants: ReadonlyMap<string, ReadonlySet<string>> | null
 }
 
 export type { Inventory }
@@ -525,6 +530,7 @@ export async function loadInventory(deps: RunWorkflowDeps): Promise<Inventory> {
   }
 
   let knownModels: ReadonlySet<string> | null = null
+  const variants = new Map<string, Set<string>>()
   try {
     const items = unwrapList(await deps.ctx.model.list())
     if (items.length > 0) {
@@ -533,7 +539,19 @@ export async function loadInventory(deps: RunWorkflowDeps): Promise<Inventory> {
           const entry = structurally(item)
           const providerID = entry["providerID"]
           const id = entry["id"]
-          return typeof providerID === "string" && typeof id === "string" ? `${providerID}/${id}` : null
+          if (typeof providerID !== "string" || typeof id !== "string") return null
+          const key = `${providerID}/${id}`
+          // `Model.Info.variants` is a list of `{ id }` objects (checked against
+          // `@opencode/schema/dist/model.d.ts`). Absent or empty means the host
+          // does not report variants for this model, which is *not* the same as
+          // "no variant is allowed" - the run only validates what it can see.
+          const ids2 = Array.isArray(entry["variants"])
+            ? entry["variants"]
+                .map((variant) => structurally(variant)["id"])
+                .filter((variantID): variantID is string => typeof variantID === "string")
+            : []
+          if (ids2.length > 0) variants.set(key, new Set(ids2))
+          return key
         })
         .filter((id): id is string => id !== null)
       if (ids.length > 0) knownModels = new Set(ids)
@@ -542,7 +560,12 @@ export async function loadInventory(deps: RunWorkflowDeps): Promise<Inventory> {
     // ignore
   }
 
-  return { defaults: { model, agent }, knownAgents, knownModels }
+  return {
+    defaults: { model, agent },
+    knownAgents,
+    knownModels,
+    modelVariants: variants.size > 0 ? variants : null,
+  }
 }
 
 /** `ctx.model.list()` / `ctx.agent.list()` return `{data, location}`, not arrays (PLAN §1 C12). */

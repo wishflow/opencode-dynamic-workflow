@@ -93,6 +93,23 @@ describe("scanWorkerCalls", () => {
     expect(sites[0]).toMatchObject({ primitive: "ctx.verify", dynamic: false, permissions: "inherit", agent: "general" })
   })
 
+  it("reads `effort`, so a bad variant is caught before any worker starts", () => {
+    const sites = scanWorkerCalls(`ctx.agent({ prompt: "x", effort: "high" })`)
+    expect(sites[0]?.effort).toBe("high")
+    expect(sites[0]?.dynamic).toBe(false)
+  })
+
+  it("reads `model` and `effort` together, so the planner can report the conflict", () => {
+    const sites = scanWorkerCalls(`ctx.agent({ prompt: "x", model: "p/m", effort: "high" })`)
+    expect(sites[0]).toMatchObject({ model: "p/m", effort: "high" })
+  })
+
+  it("marks a non-literal `effort` dynamic", () => {
+    const sites = scanWorkerCalls(`ctx.agent({ prompt: "x", effort: level })`)
+    expect(sites[0]?.dynamic).toBe(true)
+    expect(sites[0]?.effort).toBeUndefined()
+  })
+
   it("reports the 1-based line of each call site, including across newlines", () => {
     const source = ["async (ctx) => {", "  const a = await ctx.agent({", '    prompt: "a",', "  })", "  return ctx.agent({ prompt: 'b' })", "}"].join("\n")
     const sites = scanWorkerCalls(source)

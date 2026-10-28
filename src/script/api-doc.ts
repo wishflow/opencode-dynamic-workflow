@@ -16,7 +16,8 @@ export const RUN_CONTEXT_SIGNATURE = `type RunContext = {
     label?: string                 // shown in progress + artifacts
     agent?: string                 // opencode agent id, e.g. "explore" | "build"
     model?: string                 // "provider/model" or "provider/model#variant"
-    mode?: "agentic" | "oneshot"   // oneshot is not implemented yet
+    effort?: string                // sugar for model's #variant; not with model
+    mode?: "agentic" | "oneshot"   // oneshot = every tool denied, answer from the prompt
     permissions?: "inherit" | "read-only" | "dangerous-full-access"
     schema?: object                // JSON Schema; the reply is parsed as JSON
     timeoutMs?: number             // per-worker wall clock
@@ -43,7 +44,7 @@ export const RUN_CONTEXT_SIGNATURE = `type RunContext = {
   verify(claim: string | {
     claim: string
     evidence?: string              // untrusted hint; the verifier still checks it
-    label?: string; agent?: string; model?: string
+    label?: string; agent?: string; model?: string; effort?: string
     permissions?: object | string  // default "read-only"
     timeoutMs?: number
   }): Promise<{ pass: boolean; reasons: string[] }>
@@ -86,6 +87,14 @@ ${RUN_CONTEXT_SIGNATURE}
   the parsed JSON when \`schema\` is set. **A failed worker throws**, which aborts
   the script; there is no automatic retry, so retry deliberately with \`ctx.loop\`
   if the task needs it.
+- \`mode: "oneshot"\` is the same worker with **every tool denied**: it cannot read a
+  file, run a command or call a sub-agent, so its answer comes from the prompt
+  alone. Use it for "summarise/classify/rewrite this text" subtasks - it is far
+  cheaper than a worker that goes exploring - and only when everything the answer
+  needs is already in the prompt.
+- \`effort\` and \`model\` are alternatives, not partners: \`effort: "high"\` sets the
+  \`#variant\` of the inherited model. Giving both is an error, because two places
+  would decide the same thing.
 - \`ctx.parallel\` runs \`fn\` for every item with bounded concurrency and resolves to
   the results in **input order**. The first rejection stops new items from being
   dispatched, then the error is thrown.
@@ -147,9 +156,11 @@ Use this before \`odw_run\` whenever the script is non-trivial. It is the cheap 
 
 - resolves \`script\`/\`file\` exactly as \`odw_run\` would, and **compiles** it (syntax only);
 - validates \`concurrency\` / \`timeoutMs\` / \`maxWorkers\` / \`budgetUsd\`;
-- reads every **string literal** \`agent\` / \`model\` / \`mode\` / \`permissions\` in
-  \`ctx.agent({...})\` and \`ctx.verify({...})\` call sites and checks it against the
-  inventory the run will actually use;
+- reads every **string literal** \`agent\` / \`model\` / \`effort\` / \`mode\` /
+  \`permissions\` in \`ctx.agent({...})\` and \`ctx.verify({...})\` call sites and checks
+  it against the inventory the run will actually use - including a model's
+  \`#variant\` when the host reports its variant list;
+- flags a call site that gives both \`model\` and \`effort\`;
 - reports the session defaults and available agents/models.
 
 ## What it cannot check (and says so)

@@ -64,6 +64,7 @@ export function createVerifyPrimitive(deps: PrimitiveDeps, agent: (options: Agen
       schema: VERDICT_SCHEMA as unknown as Record<string, unknown>,
       ...(options.agent !== undefined ? { agent: options.agent } : {}),
       ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.effort !== undefined ? { effort: options.effort } : {}),
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     }
 

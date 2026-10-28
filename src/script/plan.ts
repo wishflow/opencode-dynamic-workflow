@@ -90,7 +90,32 @@ export async function planWorkflow(deps: PlanDeps, input: RunWorkflowInput): Pro
       if (!KNOWN_MODES.has(site.mode)) {
         problems.push(`${where}: 未知 mode ${JSON.stringify(site.mode)}（可用：agentic, oneshot）`)
       } else if (site.mode === "oneshot") {
-        problems.push(`${where}: mode "oneshot" 尚未实现（计划在 M4）；本次运行会以 not-implemented 失败`)
+        warnings.push(
+          `${where}: mode "oneshot" 会拒绝该 worker 的**所有**工具（包括读文件）：答案只能来自 prompt 本身，` +
+            `别让它去查代码库`,
+        )
+      }
+    }
+    if (site.effort !== undefined && site.model !== undefined) {
+      problems.push(
+        `${where}: 同时给了 model 和 effort：effort 就是 model 的 #variant，两者并存会出现两处真相，请只用其一`,
+      )
+    }
+    if (site.effort !== undefined || site.model !== undefined) {
+      // The variant lives either in the model ref (`p/m#high`) or in `effort`.
+      const explicit = site.model !== undefined ? parseModelKey(site.model) : null
+      const key = explicit?.key ?? defaultModelKey(inventory.defaults.model)
+      const variant = site.effort ?? explicit?.variant ?? null
+      if (variant !== null && key !== null) {
+        const allowed = inventory.modelVariants?.get(key)
+        if (allowed !== undefined && allowed.size > 0 && !allowed.has(variant)) {
+          problems.push(
+            `${where}: 未知 variant ${JSON.stringify(variant)}（模型 ${key}）。可用：${[...allowed].sort().join(", ")}`,
+          )
+        }
+      }
+      if (variant !== null && key !== null && inventory.modelVariants?.get(key) === undefined) {
+        warnings.push(`${where}: 宿主没有上报模型 ${key} 的 variant 清单，${JSON.stringify(variant)} 无法在计划阶段校验`)
       }
     }
     if (site.dynamic) {
@@ -153,16 +178,30 @@ export async function planWorkflow(deps: PlanDeps, input: RunWorkflowInput): Pro
       dynamic: site.dynamic,
       agent: site.agent ?? null,
       model: site.model ?? null,
+      effort: site.effort ?? null,
       mode: site.mode ?? null,
       permissions: site.permissions ?? null,
     })),
     literalCallsites: literalSites,
     dynamicCallsites: dynamicSites,
+    modelVariants: inventory.modelVariants === null ? null : Object.fromEntries(
+      [...inventory.modelVariants].map(([key, value]) => [key, [...value].sort()]),
+    ),
     problems,
     warnings,
   }
 
   return { ok, humanSummary: summarize(metadata, problems, warnings), metadata }
+}
+
+/** Splits `"provider/model#variant"` into its key and variant. */
+function parseModelKey(model: string): { key: string; variant: string | null } {
+  const [key, variant] = model.split("#")
+  return { key: (key ?? model).trim(), variant: variant === undefined ? null : variant.trim() }
+}
+
+function defaultModelKey(model: { providerID: string; id: string } | null): string | null {
+  return model === null ? null : `${model.providerID}/${model.id}`
 }
 
 /* ------------------------------------------------------------------ *
@@ -175,6 +214,7 @@ type WorkerCallSite = {
   dynamic: boolean
   agent?: string
   model?: string
+  effort?: string
   mode?: string
   permissions?: string
 }
@@ -215,6 +255,7 @@ export function scanWorkerCalls(source: string): WorkerCallSite[] {
       dynamic: fields.dynamic,
       ...(fields.values["agent"] !== undefined ? { agent: fields.values["agent"] } : {}),
       ...(fields.values["model"] !== undefined ? { model: fields.values["model"] } : {}),
+      ...(fields.values["effort"] !== undefined ? { effort: fields.values["effort"] } : {}),
       ...(fields.values["mode"] !== undefined ? { mode: fields.values["mode"] } : {}),
       ...(fields.values["permissions"] !== undefined ? { permissions: fields.values["permissions"] } : {}),
     })
@@ -373,7 +414,7 @@ function readTopLevelStringFields(text: string, mask: Uint8Array, offset: number
   return { values, dynamic }
 }
 
-const SENSITIVE_FIELDS = new Set(["agent", "model", "mode", "permissions"])
+const SENSITIVE_FIELDS = new Set(["agent", "model", "effort", "mode", "permissions"])
 
 /** Skips whitespace and top-level commas between properties. */
 function skipSeparators(text: string, mask: Uint8Array, from: number): number {
@@ -483,6 +524,17 @@ function summarize(metadata: Record<string, unknown>, problems: string[], warnin
     `- 参数: concurrency=${params["concurrency"]}, timeoutMs=${params["timeoutMs"]}, maxWorkers=${params["maxWorkers"]}, maxSteps=${params["maxSteps"]}, budgetUsd=${String(params["budgetUsd"] ?? "不限")}`,
     `- 静态可见 worker 调用点: ${metadata["literalCallsites"]} 个（动态：${metadata["dynamicCallsites"]} 个）`,
   ]
+  const variantMap = metadata["modelVariants"] as Record<string, string[]> | null
+  if (variantMap !== null) {
+    const total = Object.keys(variantMap).length
+    const sample = Object.entries(variantMap)
+      .slice(0, 3)
+      .map(([key, list]) => `${key}[${list.join(",")}]`)
+      .join(" ")
+    lines.push(`- variant 清单: ${total} 个模型有上报${sample === "" ? "" : `（例：${sample}）`}`)
+  } else {
+    lines.push("- variant 清单: 宿主未上报（model 的 #variant / effort 无法在计划阶段校验）")
+  }
   const sites = metadata["workerCallsites"] as Array<Record<string, unknown>>
   if (sites.length > 0) {
     lines.push("- 调用点:")
@@ -491,10 +543,13 @@ function summarize(metadata: Record<string, unknown>, problems: string[], warnin
         `line ${site["line"]}`,
         String(site["primitive"]),
         site["dynamic"] === true ? "参数动态" : "",
-        site["agent"] !== null ? `agent=${String(site["agent"])}` : "",
-        site["model"] !== null ? `model=${String(site["model"])}` : "",
-        site["mode"] !== null ? `mode=${String(site["mode"])}` : "",
-        site["permissions"] !== null ? `permissions=${String(site["permissions"])}` : "",
+        site["agent"] !== null && site["agent"] !== undefined ? `agent=${String(site["agent"])}` : "",
+        site["model"] !== null && site["model"] !== undefined ? `model=${String(site["model"])}` : "",
+        site["effort"] !== null && site["effort"] !== undefined ? `effort=${String(site["effort"])}` : "",
+        site["mode"] !== null && site["mode"] !== undefined ? `mode=${String(site["mode"])}` : "",
+        site["permissions"] !== null && site["permissions"] !== undefined
+          ? `permissions=${String(site["permissions"])}`
+          : "",
       ].filter((bit) => bit !== "")
       lines.push(`  - ${bits.join(" ")}`)
     }

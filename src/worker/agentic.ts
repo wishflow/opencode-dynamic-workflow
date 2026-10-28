@@ -15,8 +15,17 @@ import {
   type ModelRef,
   type WorkerOutcome,
 } from "../types.ts"
-import { buildWorkerPrompt, describePermissions, resolvePermissions } from "./lifecycle.ts"
+import {
+  buildOneshotPrompt,
+  buildWorkerPrompt,
+  describePermissions,
+  resolvePermissions,
+  DENY_ALL_RULES,
+  type WorkerMode,
+} from "./lifecycle.ts"
 import { extractWorkerOutcome, type MessageLike } from "./result.ts"
+
+export type { WorkerMode }
 
 export type WorkerEvent =
   | {
@@ -26,6 +35,7 @@ export type WorkerEvent =
       sessionID: string
       agent: string | null
       model: string | null
+      mode: WorkerMode
       permissions: string
       live: number
       queued: number
@@ -47,14 +57,25 @@ export type WorkerDeps = {
   /** Known inventory, used to fail fast on a typo instead of at session.create. */
   readonly knownAgents: ReadonlySet<string> | null
   readonly knownModels: ReadonlySet<string> | null
+  /** `"provider/model"` -> its variant ids, when the host reports them. */
+  readonly modelVariants: ReadonlyMap<string, ReadonlySet<string>> | null
   /** Throws `WorkerLimitError` past `maxWorkers`; returns the 1-based worker ordinal. */
   claimWorker(): number
   onEvent(event: WorkerEvent): void
 }
 
 /**
- * Runs one agentic worker: a real opencode session, parented to the calling
- * session, driven to idle, then read back.
+ * Runs one worker: a real opencode session, parented to the calling session,
+ * driven to idle, then read back.
+ *
+ * `mode` picks the posture, not the plumbing:
+ *  - `"agentic"` (default) gives the worker its normal tools, so it can read the
+ *    repo and act on it;
+ *  - `"oneshot"` denies every tool and says so in the prompt, so the answer comes
+ *    from the prompt alone. That is a *posture*, not a host-enforced single turn:
+ *    `session.create` has no tool-disable flag (checked against the generated
+ *    types), so a one-shot worker can still attempt a call - it is denied, and it
+ *    still has to answer.
  *
  * Measured constraints this code encodes (PLAN §1 C5/C6/C7/C10):
  *  - `prompt` only enqueues; the turn is not started until `wait` is observed, and
@@ -64,7 +85,7 @@ export type WorkerDeps = {
  *  - worker sessions are **not** removed afterwards: their transcripts are the
  *    evidence for what a run did, and `parentID` folds them in the session tree.
  */
-export async function runAgenticWorker(deps: WorkerDeps, options: AgentOptions): Promise<WorkerOutcome> {
+export async function runWorker(deps: WorkerDeps, options: AgentOptions): Promise<WorkerOutcome> {
   const label = (options.label ?? "worker").trim() || "worker"
 
   deps.deadline.check(`worker ${label}`)
@@ -76,7 +97,8 @@ export async function runAgenticWorker(deps: WorkerDeps, options: AgentOptions):
   // Validation deliberately precedes `claimWorker`: claiming is what increments the
   // run's "workers started" counter, and a typo'd agent never started anything.
   // Counting it would put a phantom worker in the summary and the artifacts.
-  const workerModel = resolveWorkerModel(deps, options, label)
+  const mode = resolveMode(options.mode, label)
+  const { ref: workerModel, source: variantSource } = resolveWorkerModel(deps, options, label)
   const agent = options.agent ?? deps.defaultAgent ?? undefined
   if (agent && deps.knownAgents && !deps.knownAgents.has(agent)) {
     throw new OdwError(
@@ -85,9 +107,15 @@ export async function runAgenticWorker(deps: WorkerDeps, options: AgentOptions):
     )
   }
   const ordinal = deps.claimWorker()
-  const permissions = resolvePermissions(options.permissions)
+  // A one-shot worker denies everything unless the script asked for something
+  // explicitly; the default here is the whole point of the mode.
+  const permissions =
+    options.permissions === undefined && mode === "oneshot"
+      ? DENY_ALL_RULES
+      : resolvePermissions(options.permissions)
   const expectJson = options.schema !== undefined
-  const promptText = buildWorkerPrompt(options.prompt, options.schema)
+  const promptText =
+    mode === "oneshot" ? buildOneshotPrompt(options.prompt, options.schema) : buildWorkerPrompt(options.prompt, options.schema)
 
   return deps.semaphore.run(async () => {
     const started = Date.now()
@@ -107,7 +135,8 @@ export async function runAgenticWorker(deps: WorkerDeps, options: AgentOptions):
       sessionID,
       agent: agent ?? null,
       model: workerModel === null ? null : formatModelRef(workerModel),
-      permissions: describePermissions(options.permissions),
+      mode,
+      permissions: describePermissions(options.permissions, mode),
       live: deps.semaphore.inFlight,
       queued: deps.semaphore.queued,
     })
@@ -118,6 +147,8 @@ export async function runAgenticWorker(deps: WorkerDeps, options: AgentOptions):
       sessionID,
       agent: agent ?? null,
       model: workerModel === null ? null : formatModelRef(workerModel),
+      mode,
+      variantSource,
     })
 
     const onAbort = (): void => {
@@ -181,16 +212,76 @@ export async function runAgenticWorker(deps: WorkerDeps, options: AgentOptions):
   })
 }
 
-function resolveWorkerModel(deps: WorkerDeps, options: AgentOptions, label: string): ModelRef | null {
-  if (!options.model) return deps.defaultModel
-  const ref = parseModelRef(options.model)
-  if (deps.knownModels && deps.knownModels.size > 0) {
-    const key = `${ref.providerID}/${ref.id}`
-    if (!deps.knownModels.has(key)) {
-      throw new OdwError("bad-args", `未知 model ${JSON.stringify(options.model)}（worker ${label}）：不在当前可用模型清单里`)
-    }
+/**
+ * Exported for the unit tests: mode/model/variant resolution is where a mistyped
+ * argument is either caught for free or turned into a wasted `session.create`.
+ */
+export function resolveMode(mode: string | undefined, label: string): WorkerMode {
+  if (mode === undefined) return "agentic"
+  if (mode === "agentic" || mode === "oneshot") return mode
+  throw new OdwError("bad-args", `未知 mode ${JSON.stringify(mode)}（worker ${label}）：可用 "agentic" 或 "oneshot"`)
+}
+
+/**
+ * Locates the model for a worker and validates it, including its variant.
+ *
+ * `model` and `effort` are mutually exclusive on purpose: `#variant` in a model
+ * ref and a separate `effort` field are two ways to say the same thing, and
+ * accepting both would make "which one won" a question the run journal has to
+ * answer. `effort` is therefore sugar - it sets the variant of the inherited
+ * model - and only when no explicit model was given.
+ */
+export function resolveWorkerModel(
+  deps: WorkerDeps,
+  options: AgentOptions,
+  label: string,
+): { ref: ModelRef | null; source: "model" | "effort" | "inherited" } {
+  if (options.effort !== undefined && options.model !== undefined) {
+    throw new OdwError(
+      "bad-args",
+      `worker ${label} 同时给了 model 和 effort：请只用其中一个（effort 是设置 model 的 #variant，` +
+        `两者并存会出现两处真相）`,
+    )
   }
-  return ref
+  if (options.effort === undefined && options.model === undefined) {
+    return { ref: deps.defaultModel, source: "inherited" }
+  }
+
+  let ref: ModelRef
+  if (options.effort !== undefined) {
+    if (typeof options.effort !== "string" || options.effort.trim() === "") {
+      throw new OdwError("bad-args", `worker ${label} 的 effort 必须是非空字符串`)
+    }
+    if (deps.defaultModel === null) {
+      throw new OdwError(
+        "bad-args",
+        `worker ${label} 只给了 effort 但没有可继承的默认模型，也无从判断 ${JSON.stringify(options.effort)} 是否合法：请显式给 model`,
+      )
+    }
+    ref = { ...deps.defaultModel, variant: options.effort.trim() }
+  } else {
+    ref = parseModelRef(options.model ?? "")
+  }
+
+  const key = `${ref.providerID}/${ref.id}`
+  if (deps.knownModels && deps.knownModels.size > 0 && !deps.knownModels.has(key)) {
+    throw new OdwError(
+      "bad-args",
+      `未知 model ${JSON.stringify(options.model ?? key)}（worker ${label}）：不在当前可用模型清单里`,
+    )
+  }
+
+  // Variants are only checked when the host actually reports them for this model;
+  // an empty list means "unknown", not "none allowed".
+  const allowed = deps.modelVariants?.get(key)
+  if (allowed !== undefined && allowed.size > 0 && ref.variant !== "default" && !allowed.has(ref.variant)) {
+    throw new OdwError(
+      "bad-args",
+      `未知 variant ${JSON.stringify(ref.variant)}（worker ${label}，模型 ${key}）。可用：${[...allowed].sort().join(", ")}`,
+    )
+  }
+
+  return { ref, source: options.effort === undefined ? "model" : "effort" }
 }
 
 /**

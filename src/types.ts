@@ -71,7 +71,23 @@ export type AgentOptions = {
   agent?: string
   /** `"provider/model"` or `"provider/model#variant"`. Defaults to the calling session's model. */
   model?: string
-  /** `"agentic"` (default) gives the worker tools; `"oneshot"` is a single model turn. */
+  /**
+   * Reasoning effort, as sugar for the inherited model's `#variant`
+   * (`effort: "high"` == `model: "<inherited>#high"`).
+   *
+   * Mutually exclusive with `model`: both would decide the same thing, and the
+   * run journal would have to guess which one won.
+   */
+  effort?: string
+  /**
+   * `"agentic"` (default) gives the worker its normal tools, so it can read the
+   * repo and act on it.
+   *
+   * `"oneshot"` denies **every** tool and says so in the prompt: the answer must
+   * come from the prompt alone. It is a posture, not a host-enforced single turn
+   * (`session.create` has no tool-disable flag), so a one-shot worker can still
+   * attempt a tool call - it gets denied and answers without it.
+   */
   mode?: AgentMode
   /** Permission posture for the worker session. Defaults to `"inherit"`. */
   permissions?: PermissionSpec
@@ -120,6 +136,8 @@ export type VerifyOptions = {
   label?: string
   agent?: string
   model?: string
+  /** Sugar for the inherited model's `#variant`. Mutually exclusive with `model`. */
+  effort?: string
   /** Defaults to `"read-only"`: a verifier that can edit is not a verifier. */
   permissions?: PermissionSpec
   timeoutMs?: number
