@@ -4,4 +4,5 @@ coverage/
 *.log
 
 # Local workflow run artifacts
+.odw/
 .opencode/odw/

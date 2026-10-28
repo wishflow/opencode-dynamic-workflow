@@ -1,0 +1,239 @@
+/**
+ * Shared types for opencode-dynamic-workflow.
+ *
+ * Two audiences live in this file:
+ *  - the *script API* (`RunContext` and friends) - the only surface the model is
+ *    allowed to see, and the only thing `api-doc.ts` documents;
+ *  - the *host internals* (`WorkerOutcome`, `RunRecord`, ...) - never visible to
+ *    the sandbox.
+ */
+
+/** Token accounting, mirroring opencode's `TokenUsage.Info` but flattened. */
+export type Tokens = {
+  input: number
+  output: number
+  reasoning: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+export function zeroTokens(): Tokens {
+  return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
+}
+
+export function addTokens(a: Tokens, b: Tokens): Tokens {
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    reasoning: a.reasoning + b.reasoning,
+    cacheRead: a.cacheRead + b.cacheRead,
+    cacheWrite: a.cacheWrite + b.cacheWrite,
+  }
+}
+
+export type ModelRef = {
+  providerID: string
+  id: string
+  variant: string
+}
+
+export type PermissionEffect = "allow" | "deny" | "ask"
+
+export type PermissionRule = {
+  action: string
+  resource: string
+  effect: PermissionEffect
+}
+
+/**
+ * Permission posture for a worker session.
+ *
+ * `"read-only"` is the safe default ODW wants to offer for analysis workflows;
+ * `"inherit"` means "do not pass `permissions` at all", so the session picks up
+ * the project/agent defaults.
+ */
+export type PermissionMode = "inherit" | "read-only" | "dangerous-full-access"
+
+export type PermissionSpec = PermissionMode | readonly PermissionRule[]
+
+/* ------------------------------------------------------------------ *
+ * Script API (visible inside the sandbox)
+ * ------------------------------------------------------------------ */
+
+export type AgentMode = "agentic" | "oneshot"
+
+export type AgentOptions = {
+  /** The instruction handed to the worker session. Required, non-empty. */
+  prompt: string
+  /** Human label used in progress messages, journals and worker session titles. */
+  label?: string
+  /** opencode agent id (e.g. `"explore"`, `"build"`). Defaults to the session's agent. */
+  agent?: string
+  /** `"provider/model"` or `"provider/model#variant"`. Defaults to the calling session's model. */
+  model?: string
+  /** `"agentic"` (default) gives the worker tools; `"oneshot"` is a single model turn. */
+  mode?: AgentMode
+  /** Permission posture for the worker session. Defaults to `"inherit"`. */
+  permissions?: PermissionSpec
+  /** JSON Schema for the expected answer. When set, the worker's text is parsed as JSON. */
+  schema?: Record<string, unknown>
+  /** Per-worker wall-clock budget in milliseconds. */
+  timeoutMs?: number
+}
+
+export type ParallelOptions = {
+  /** Maximum items processed at once. Clamped to the run's `concurrency`. */
+  concurrency?: number
+}
+
+export type BudgetSnapshot = {
+  workers: number
+  cost: number
+  tokens: Tokens
+  limitUsd: number | null
+}
+
+/**
+ * The `ctx` object handed to a workflow script. This is the *entire* API: the
+ * sandbox exposes nothing else besides these functions and a `console` shim.
+ */
+export type RunContext = {
+  agent<T = string>(options: AgentOptions): Promise<T>
+  parallel<T, R>(
+    items: readonly T[],
+    fn: (item: T, index: number) => Promise<R> | R,
+    options?: ParallelOptions,
+  ): Promise<R[]>
+  log(...args: unknown[]): void
+  phase(name: string): void
+  budget(): BudgetSnapshot
+}
+
+/* ------------------------------------------------------------------ *
+ * Script execution
+ * ------------------------------------------------------------------ */
+
+export type ScriptErrorKind =
+  | "syntax"
+  | "timeout"
+  | "aborted"
+  | "budget"
+  | "worker-limit"
+  | "worker-failed"
+  | "bad-args"
+  | "not-implemented"
+  | "internal"
+
+export type ScriptError = {
+  kind: ScriptErrorKind
+  message: string
+  /** Worker label / primitive name that failed, when known. */
+  at?: string
+}
+
+export type ScriptResult =
+  | { status: "ok"; returnValue: unknown; elapsedMs: number }
+  | { status: "error"; error: ScriptError; elapsedMs: number }
+
+/* ------------------------------------------------------------------ *
+ * Workers
+ * ------------------------------------------------------------------ */
+
+export type WorkerUsage = {
+  tokens: Tokens
+  cost: number
+  model?: ModelRef
+}
+
+export type WorkerFailure = {
+  kind: ScriptErrorKind
+  message: string
+}
+
+export type WorkerOutcome = {
+  /** Stable per-run index, 1-based, in start order. */
+  index: number
+  label: string
+  ok: boolean
+  text: string
+  /** Parsed JSON answer when `schema` was requested. */
+  json?: unknown
+  sessionID?: string
+  usage: WorkerUsage
+  failure?: WorkerFailure
+  elapsedMs: number
+}
+
+/* ------------------------------------------------------------------ *
+ * Errors (host side)
+ * ------------------------------------------------------------------ */
+
+export class OdwError extends Error {
+  readonly kind: ScriptErrorKind
+
+  constructor(kind: ScriptErrorKind, message: string) {
+    super(message)
+    this.kind = kind
+    this.name = new.target.name
+  }
+}
+
+export class BudgetExceededError extends OdwError {
+  constructor(message: string) {
+    super("budget", message)
+  }
+}
+
+export class WorkerLimitError extends OdwError {
+  constructor(message: string) {
+    super("worker-limit", message)
+  }
+}
+
+export class WorkflowTimeoutError extends OdwError {
+  constructor(message: string) {
+    super("timeout", message)
+  }
+}
+
+export class WorkflowAbortedError extends OdwError {
+  constructor(message: string) {
+    super("aborted", message)
+  }
+}
+
+export class WorkerFailedError extends OdwError {
+  readonly outcome: WorkerOutcome
+
+  constructor(outcome: WorkerOutcome) {
+    super("worker-failed", `worker ${outcome.label} 失败（${outcome.failure?.kind ?? "unknown"}）：${outcome.failure?.message ?? ""}`)
+    this.outcome = outcome
+  }
+}
+
+/**
+ * Thrown when a model call is attempted from plugin `setup`. Measured: doing so
+ * wedges the host server (PLAN §3.7), so it is a hard programming error, not a
+ * runtime condition to recover from.
+ */
+export class SetupModelCallError extends OdwError {
+  constructor(message: string) {
+    super("internal", message)
+  }
+}
+
+export function toScriptError(error: unknown): ScriptError {
+  if (error instanceof OdwError) {
+    return { kind: error.kind, message: error.message }
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  return { kind: classifyUnknown(error), message }
+}
+
+function classifyUnknown(error: unknown): ScriptErrorKind {
+  const message = error instanceof Error ? error.message : String(error)
+  if (/timed out|timeout/i.test(message)) return "timeout"
+  if (error instanceof SyntaxError) return "syntax"
+  if (/aborted|AbortError/i.test(message)) return "aborted"
+  return "internal"
+}
