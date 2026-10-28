@@ -22,7 +22,8 @@ export const ODW_HINT_MARKER = "<!-- odw:hint -->"
 export const ODW_HINT = [
   ODW_HINT_MARKER,
   "（上面这个请求看起来是批量/扇出型的。如果确实要把同一件事作用到 N 个对象上，",
-  "可以用 `odw_run` 写一个 `async (ctx) => {...}` 脚本并行跑；不确定就按普通方式回答，不必迁就这条提示。）",
+  "可以用 `odw_plan` 先免费 dry-run 一个 `async (ctx) => {...}` 脚本（编译 + 校验 agent/model/权限），",
+  "再用 `odw_run` 真跑；不确定就按普通方式回答，不必迁就这条提示。）",
 ].join("\n")
 
 /**
