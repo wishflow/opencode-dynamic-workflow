@@ -114,6 +114,14 @@ opencode 的 CLI 只会改**全局**配置，所以 `--local` 由脚本自己写
 | `odw_workflows` | **不保留** | 它读的是 daemon 状态；ODW 的记录在 `.odw/runs/<runId>/`，两套状态源必须只留一套 |
 | `~/.odw/config.json`、`odw-daemon` | 不需要 | ODW 不需要 key，也不跑 daemon |
 
+如果**先装过旧插件**，它自己的清单还留在盘上（`~/.config/opencode/.odw-migration.json`，旧格式），新 `install` 会直接拒绝而不是瞎猜：
+
+```text
+odw-install: already installed (/Users/you/.config/opencode/.odw-migration.json). Run rollback first, or delete the manifest and reinstall.
+```
+
+这条拒绝是刻意的——脚本不会覆盖自己不认识的清单。要么先用旧脚本 `rollback`，要么把那个文件挪开再装。`install` 发现自己**本版本**的清单时同样拒绝，理由相同。
+
 ---
 
 ## 触发是怎么发生的
@@ -302,6 +310,7 @@ opencode-dynamic-workflow/
 | `odw_plan` 不执行脚本 | 它只看**字面量**：`agent: someVar`、在 `parallel`/`loop` 里拼出来的调用点会被标成 `dynamic` 并跳过校验，所以真实 worker 数在计划阶段不可预测 |
 | 计划通过 ≠ 运行成功 | 逻辑错误、运行期失败、worker 数量它都看不到 |
 | 免费模型给不出金额 | 见「上限与预算」的诚实说明 |
+| worker 继承会话的模型 | 除非脚本在该调用上传 `model`（或 `effort`）。会话本身跑在免费档时，每个 worker 都会撞 provider 配额，run 以 `kind: "internal"` 失败——用 `opencode run` 驱动 ODW 时请显式传 `--model` |
 | 旧的 `odw_ultracode` / `odw_workflows` 不保留 | 避免两套状态源；旧命令是改名而非删除，所以可回滚 |
 
 ---

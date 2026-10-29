@@ -116,6 +116,14 @@ The install script performs this migration; the table above is what it does. The
 | `odw_workflows` | **not carried over** | It read daemon state; ODW's record lives in `.odw/runs/<runId>/`, and two sources of truth is one too many |
 | `~/.odw/config.json`, `odw-daemon` | not needed | ODW needs no key and runs no daemon |
 
+If you installed the **old** plugin first, its own manifest is still on disk (`~/.config/opencode/.odw-migration.json`, written in an older format) and `install` will refuse rather than guess:
+
+```text
+odw-install: already installed (/Users/you/.config/opencode/.odw-migration.json). Run rollback first, or delete the manifest and reinstall.
+```
+
+That refusal is deliberate - the script will not overwrite a manifest whose shape it does not understand. Either roll the old install back first, or move that file aside and reinstall. `install` also refuses when *its own* manifest is present, for the same reason.
+
 ---
 
 ## How triggering works
@@ -304,6 +312,7 @@ opencode-dynamic-workflow/
 | `odw_plan` does not execute the script | It only reads **literals**: `agent: someVar`, or a call site built inside `parallel`/`loop`, is marked `dynamic` and skipped, so the real worker count is not predictable at plan time |
 | A passing plan is not a passing run | Logic errors, runtime failures and worker counts are all invisible to it |
 | Free models report no money | See the honest note under Limits |
+| A worker inherits the session's model | Unless the script passes `model` (or `effort`) on that call. If the session runs on a free tier, every worker hits the provider quota and the run fails with `kind: "internal"` - pass `--model` explicitly when you drive ODW from `opencode run` |
 | The old `odw_ultracode` / `odw_workflows` are not carried over | Two sources of truth is one too many; the old commands are renamed, not deleted, so this is reversible |
 
 ---
