@@ -262,7 +262,11 @@ plan_renames() {
   for rel in $LEGACY_FILES; do
     from="$CONFIG_DIR/$rel"
     to="$from.disabled"
-    if { [ -f "$from" ] && [ ! -e "$to" ]; } || { [ -e "$to" ] && [ ! -e "$from" ]; }; then
+    # Record only what this install actually renames. A file that was already disabled before
+    # the install must NOT be recorded: `rollback` restores every entry, so recording it would
+    # turn a pre-existing `*.disabled` back into an active file - a regression against the
+    # state the install found.
+    if [ -f "$from" ] && [ ! -e "$to" ]; then
       if [ "$first" -eq 1 ]; then first=0; else json="$json,"; fi
       json="$json{\"from\":\"$rel\",\"to\":\"$rel.disabled\"}"
     fi
