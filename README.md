@@ -143,7 +143,8 @@ Design consequences worth knowing:
 
 - the plugin registers **no prompt hook** and rewrites nothing you type - what the model sees is what you sent plus the skills opencode offers it;
 - nothing runs automatically: the skill ends at calling `odw_plan` / `odw_run`, and both are ordinary tools that only do anything when the model (or you) calls them;
-- *when* to use ODW lives in the description, *how* to drive it lives in the body, and both live in one file that reviewers can read like any other source file.
+- *when* to use ODW lives in the description, *how* to drive it lives in the body, and both live in one file that reviewers can read like any other source file;
+- the description is Chinese and the body English, but there is **no keyword list** anywhere: the model decides. Measured 2026-10-29 - the same fan-out request loaded the skill in English, Japanese and Korean alike, each producing a real run with `status: "ok"`.
 
 ---
 
