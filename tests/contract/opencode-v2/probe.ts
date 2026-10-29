@@ -148,6 +148,26 @@ async function runAll(ctx: Any, toolContext: Any): Promise<Record<string, unknow
     modelRef: model,
   }
 
+  // C21 - the skill registry. The harness writes a skill fixture at
+  // `.opencode/skills/odw-contract-probe/SKILL.md`; this records whether the host turned it
+  // into a registry entry (name/description from the frontmatter, body loaded) - which is the
+  // whole natural-language trigger surface of ODW.
+  const skills = await attempt(() => ctx.skill.list())
+  const skillItems = unwrap(skills.ok ? skills.value : undefined)
+  out["c21-skill-registry"] = {
+    domainMembers: Object.keys(ctx.skill ?? {}).sort(),
+    listOk: skills.ok,
+    listRawKeys: skills.ok
+      ? Array.isArray(skills.value)
+        ? "(array)"
+        : Object.keys(skills.value ?? {}).sort()
+      : skills,
+    count: skillItems.length,
+    names: skillItems.map((s: Any) => s?.name).slice(0, 120),
+    firstKeys: skillItems[0] ? Object.keys(skillItems[0]).sort() : undefined,
+    fixture: skillItems.find((s: Any) => s?.name === "odw-contract-probe") ?? null,
+  }
+
   // C3 - Model.Ref shape
   const refProbe = {
     goodPair: await attempt(() => ctx.session.create({ model: model ? { providerID: model.providerID, id: model.id } : undefined })),

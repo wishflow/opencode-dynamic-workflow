@@ -54,6 +54,18 @@ mkdirSync(OUT, { recursive: true })
 
 writeFileSync(join(PROJECT, ".opencode/plugins/odw-probe/index.ts"), `export { default } from ${JSON.stringify(PROBE)}\n`)
 writeFileSync(join(PROJECT, "opencode.json"), `{\n  "$schema": "https://opencode.ai/config.json"\n}\n`)
+
+// C21 - the skill fixture. ODW's whole natural-language trigger is a file at
+// `.opencode/skills/<name>/SKILL.md`, so the contract has to pin that such a file is
+// discovered, its frontmatter parsed and its body loaded. The name and the body marker are
+// asserted in assert.mjs; changing one means changing both.
+const SKILL_NAME = "odw-contract-probe"
+const SKILL_MARKER = "odw-contract-skill-body-marker"
+mkdirSync(join(PROJECT, ".opencode/skills", SKILL_NAME), { recursive: true })
+writeFileSync(
+  join(PROJECT, ".opencode/skills", SKILL_NAME, "SKILL.md"),
+  `---\nname: ${SKILL_NAME}\ndescription: Contract fixture for skill discovery. Not a real skill.\n---\n\n# ${SKILL_NAME}\n\n${SKILL_MARKER}\n`,
+)
 writeFileSync(join(PROJECT, ".directory.json"), JSON.stringify({ directory: DIRECTORY }))
 execFileSync("git", ["init", "-q", "."], { cwd: PROJECT })
 

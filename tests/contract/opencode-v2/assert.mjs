@@ -216,6 +216,44 @@ export function assertContract({ obs, hookLines, logs, directory }) {
   check("C18b", "sandbox has its own standard built-ins", globals.Promise === "function" && globals.JSON === "object" && globals.Object === "function", globals)
   check("C18c", "eval is still a function but codeGeneration blocks it (see C11b)", globals.eval === "function", globals)
 
+  // C21 - skill discovery: the mechanism ODW's natural-language trigger depends on.
+  // The harness plants `.opencode/skills/odw-contract-probe/SKILL.md` in the throwaway project
+  // and checks the host registered it with the frontmatter name/description and the body loaded.
+  const c21 = get("c21-skill-registry") ?? {}
+  const fixture = c21.fixture ?? {}
+  check(
+    "C21a",
+    "ctx.skill.list() returns the skill registry",
+    c21.listOk === true && typeof c21.count === "number",
+    { listOk: c21.listOk, listRawKeys: c21.listRawKeys, count: c21.count },
+  )
+  check(
+    "C21b",
+    "project skill at .opencode/skills/<name>/SKILL.md is registered",
+    Boolean(c21.fixture),
+    { names: c21.names },
+  )
+  check("C21c", "registry name comes from the frontmatter", fixture.name === "odw-contract-probe", fixture.name)
+  check("C21d", "registry id is present", typeof fixture.id === "string" && fixture.id.length > 0, fixture.id)
+  check(
+    "C21e",
+    "registry description comes from the frontmatter",
+    typeof fixture.description === "string" && fixture.description.includes("Contract fixture"),
+    fixture.description,
+  )
+  check(
+    "C21f",
+    "skill body is loaded into the registry (the model gets content, not just a name)",
+    typeof fixture.content === "string" && fixture.content.includes("odw-contract-skill-body-marker"),
+    typeof fixture.content === "string" ? fixture.content.slice(0, 200) : fixture.content,
+  )
+  check(
+    "C21g",
+    "registry path points at the project skill file",
+    String(fixture.path ?? "").endsWith(".opencode/skills/odw-contract-probe/SKILL.md"),
+    fixture.path,
+  )
+
   return results
 }
 

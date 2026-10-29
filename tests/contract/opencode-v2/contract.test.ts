@@ -18,7 +18,7 @@ const enabled = process.env["ODW_CONTRACT"] === "1"
 
 describe.skipIf(!enabled)("opencode v2 contract", () => {
   it(
-    "probe observations satisfy C1-C15",
+    "probe observations satisfy C1-C21",
     () => {
       const output = execFileSync("node", [join(HERE, "run.mjs")], {
         encoding: "utf8",
@@ -26,7 +26,7 @@ describe.skipIf(!enabled)("opencode v2 contract", () => {
         env: process.env,
       })
       expect(output).not.toContain("FAIL")
-      expect(output).toMatch(/55\/55 passed/)
+      expect(output).toMatch(/62\/62 passed/)
     },
     900_000,
   )

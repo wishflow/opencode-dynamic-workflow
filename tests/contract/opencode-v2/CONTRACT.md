@@ -9,7 +9,7 @@
 | opencode | `2.1.0`（homebrew `opencode-v2`） |
 | 嵌入式 JS 运行时 | Bun `1.4.2`（`process.versions.node` 报 `26.3.0`） |
 | `@opencode/plugin`（类型包） | `2.2.0`（与运行时存在版本差，已知风险） |
-| 观察日期 | 2026-10-28 |
+| 观察日期 | 2026-10-29 |
 
 ## 1. 怎么跑
 
@@ -43,7 +43,7 @@ ODW_CONTRACT=1 npx vitest run tests/contract
 
 ## 3. 观察结果
 
-`55/55` 通过（`run.mjs` 末行）。关键事实如下。
+`62/62` 通过（`run.mjs` 末行）。关键事实如下。
 
 ### 3.1 契约面（C1–C5）
 
@@ -165,6 +165,24 @@ create → context() 给 [] → prompt() → context() 仍是 0 条 → wait() �
 
 > 这条把「hook 只碰 text、且改写确实进入模型输入」钉死了。
 
+### 3.9 skill 发现（C21）—— 自然语言触发的唯一载体
+
+harness 在临时项目里写入 `.opencode/skills/odw-contract-probe/SKILL.md`（frontmatter 带 `name` / `description`，正文带 marker），然后在探针里读 `ctx.skill.list()`：
+
+| 观察 | 值 |
+|---|---|
+| `ctx.skill` 的成员 | **只有 `list, reload, transform`** |
+| `ctx.skill.list()` 返回 | **`{ data, location }` 包装对象**（与 `model.list` / `agent.list` 同形状，见 C12） |
+| 条目字段 | `id, name, description, path, content`（`autoinvoke` 未设置时不出现） |
+| `name` | 取自 frontmatter |
+| `description` | 取自 frontmatter |
+| `content` | **只有正文，frontmatter 已被剥掉** —— 「模型加载 skill」拿到的就是这一段 |
+| `path` | 绝对路径，指向项目的 `.opencode/skills/<name>/SKILL.md` |
+| 注册表规模（本次） | 60 条 = 用户全局 `~/.config/opencode/skills/*` **与项目 skill 合并**，再加本 fixture |
+
+> 结论：ODW 的触发面是可被契约钉死的 —— 文件存在 → 上架 → frontmatter 解析 → 正文进注册表。
+> **契约没钉的两件事**（诚实标注）：① 全局 `~/.config/opencode/skills/` 那条路径（§2 规则禁止写用户全局配置）；② 「模型在真实会话里读到并主动激活它」—— 后者在真机验收清单里验（PLAN §9）。
+
 ## 4. 负向控制
 
 把探针里 C7 的 `await Promise.all([wait, wait])` 改成 `await Promise.all([])`，重跑：
@@ -174,7 +192,21 @@ FAIL  C7b   both workers produced text
 38/39 passed
 ```
 
-其余 38 项保持绿色 —— 断言确实绑在真实行为上，不是恒真。
+其余 38 项保持绿色 —— 断言确实绑在真实行为上，不是恒真。（这段是加入 C21 之前测的，当时断言总数是 39。）
+
+C21 的反证：把 `run.mjs` 里写入 skill fixture 的那段临时注释掉，重跑：
+
+```
+FAIL  C21b  project skill at .opencode/skills/<name>/SKILL.md is registered
+FAIL  C21c  registry name comes from the frontmatter
+FAIL  C21d  registry id is present
+FAIL  C21e  registry description comes from the frontmatter
+FAIL  C21f  skill body is loaded into the registry
+FAIL  C21g  registry path points at the project skill file
+56/62 passed
+```
+
+`C21a`（「注册表本身可用」）仍然绿 —— 红的这几条确实绑在「那个文件被上架」这件事上。
 
 > 另外也踩过一次**假绿以外**的反面：探针默认挑 `model.list()` 里的第一个模型，而它是免费额度模型；额度耗尽后所有模型相关断言集体变红（`C7b`、`C9d`、`C9e` 全挂，报 `provider.quota`）。现在 harness 固定用 `compass/deepseek-v4.1-flash`（可用 `ODW_PROBE_MODEL` 覆盖）。**契约测试不能依赖免费额度。**
 
@@ -192,3 +224,4 @@ FAIL  C7b   both workers produced text
 | C18 | `opencode run "/cmd args"` 会走命令派发 | **不会**；命令只能由 TUI / `session.command` 触发 |
 | C19 | user 消息文本在 `payload.text` | `SessionMessageUser` 是顶层 `text` |
 | C20 | 沙箱需要注入宿主的 `JSON/Math/Date` 并冻结 | 沙箱自带自己 realm 的内置对象，注入宿主对象只会引入跨 realm 混淆；只注入 `console` + 原语 |
+| C21 | skill 发现路径 `<root>/skills/<name>/SKILL.md`（方案假定，未在契约里验过） | 项目级已实测上架：`ctx.skill` 只有 `list/reload/transform`；`list()` 返回 `{data, location}`；条目 `id/name/description/path/content`，其中 `content` 是**剥掉 frontmatter 的纯正文**；项目 skill 与用户全局 skill 合并。全局路径与本条同规则，未在契约里钉 |
