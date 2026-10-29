@@ -59,22 +59,22 @@ export function extractWorkerOutcome(messages: readonly MessageLike[], options: 
       ...base,
       ok: false,
       text: "",
-      failure: failureFor(undefined, idle, "worker 没有产生任何 assistant 消息"),
+      failure: failureFor(undefined, idle, "worker produced no assistant message"),
     }
   }
 
   const text = assistantText(last)
   if (idle?.outcome === "interrupted") {
-    return { ...base, ok: false, text, failure: { kind: "aborted", message: "worker 会话被中断" } }
+    return { ...base, ok: false, text, failure: { kind: "aborted", message: "worker session was interrupted" } }
   }
   if (last?.error) {
-    return { ...base, ok: false, text, failure: failureFor(last.error, idle, "worker 回合以错误结束") }
+    return { ...base, ok: false, text, failure: failureFor(last.error, idle, "worker turn ended with an error") }
   }
   if (idle?.outcome === "failed") {
-    return { ...base, ok: false, text, failure: failureFor(idle.error, idle, "worker 回合失败") }
+    return { ...base, ok: false, text, failure: failureFor(idle.error, idle, "worker turn failed") }
   }
   if (text.trim() === "") {
-    return { ...base, ok: false, text, failure: { kind: "internal", message: "worker 回复为空文本" } }
+    return { ...base, ok: false, text, failure: { kind: "internal", message: "worker replied with empty text" } }
   }
 
   if (!options.expectJson) {
@@ -87,7 +87,7 @@ export function extractWorkerOutcome(messages: readonly MessageLike[], options: 
       ...base,
       ok: false,
       text,
-      failure: { kind: "internal", message: `worker 回复不是可解析的 JSON：${text.slice(0, 200)}` },
+      failure: { kind: "internal", message: `worker reply is not parseable JSON: ${text.slice(0, 200)}` },
     }
   }
   return { ...base, ok: true, text, json: parsed }
@@ -101,7 +101,7 @@ function failureFor(
   const detail = error?.message ?? (idle?.error as { message?: string } | undefined)?.message
   const type = error?.type ?? (idle?.error as { type?: string } | undefined)?.type
   if (type === "provider.quota" || /quota|rate limit|usage limit/i.test(detail ?? "")) {
-    return { kind: "internal", message: `provider 额度/限流：${detail ?? fallback}` }
+    return { kind: "internal", message: `provider quota/rate limit: ${detail ?? fallback}` }
   }
   return { kind: "internal", message: detail ? `${type ?? "error"}: ${detail}` : fallback }
 }

@@ -27,10 +27,10 @@ export function createParallelPrimitive(deps: PrimitiveDeps) {
     options?: ParallelOptions,
   ): Promise<R[]> {
     if (!Array.isArray(items)) {
-      throw new OdwError("bad-args", "ctx.parallel(items, fn) 的 items 必须是数组")
+      throw new OdwError("bad-args", "ctx.parallel(items, fn) needs items to be an array")
     }
     if (typeof fn !== "function") {
-      throw new OdwError("bad-args", "ctx.parallel(items, fn) 的 fn 必须是函数")
+      throw new OdwError("bad-args", "ctx.parallel(items, fn) needs fn to be a function")
     }
     if (items.length === 0) return []
 
@@ -42,7 +42,7 @@ export function createParallelPrimitive(deps: PrimitiveDeps) {
     let stopped = false
     const limiter = new Semaphore(limit)
 
-    deps.log(`parallel: ${items.length} 项，并发 ${limit}`)
+    deps.log(`parallel: ${items.length} items, concurrency ${limit}`)
 
     await Promise.all(
       items.map((item, index) =>
@@ -66,10 +66,10 @@ export function createParallelPrimitive(deps: PrimitiveDeps) {
         .map((error) => (error instanceof Error ? error.message : String(error)))
         .slice(0, 3)
         .join(" | ")
-      throw new OdwError("internal", `parallel 有 ${failures.length} 项失败（只抛第一个）：${names}`)
+      throw new OdwError("internal", `parallel: ${failures.length} item(s) failed (only the first is thrown): ${names}`)
     }
     if (stopped) {
-      throw new OdwError("internal", "parallel 被提前终止")
+      throw new OdwError("internal", "parallel was terminated early")
     }
     return results
   }

@@ -89,9 +89,9 @@ export async function runWorker(deps: WorkerDeps, options: AgentOptions): Promis
   const label = (options.label ?? "worker").trim() || "worker"
 
   deps.deadline.check(`worker ${label}`)
-  assertNoModelCall(`worker ${label} 的 session.create`)
+  assertNoModelCall(`session.create for worker ${label}`)
   if (deps.budget.exceeded()) {
-    throw new BudgetExceededError(`worker ${label} 未启动：${deps.budget.describeLimit()}`)
+    throw new BudgetExceededError(`worker ${label} not started: ${deps.budget.describeLimit()}`)
   }
 
   // Validation deliberately precedes `claimWorker`: claiming is what increments the
@@ -103,7 +103,7 @@ export async function runWorker(deps: WorkerDeps, options: AgentOptions): Promis
   if (agent && deps.knownAgents && !deps.knownAgents.has(agent)) {
     throw new OdwError(
       "bad-args",
-      `未知 agent ${JSON.stringify(agent)}（worker ${label}）。可用：${[...deps.knownAgents].sort().join(", ")}`,
+      `unknown agent ${JSON.stringify(agent)} (worker ${label}). Available: ${[...deps.knownAgents].sort().join(", ")}`,
     )
   }
   const ordinal = deps.claimWorker()
@@ -159,7 +159,7 @@ export async function runWorker(deps: WorkerDeps, options: AgentOptions): Promis
     try {
       await deps.ctx.session.prompt({ sessionID, text: promptText })
       await waitForWorker(deps, sessionID, options.timeoutMs, label)
-      if (deps.signal.aborted) throw new WorkflowAbortedError(`worker ${label} 在等待期间被取消`)
+      if (deps.signal.aborted) throw new WorkflowAbortedError(`worker ${label} was cancelled while waiting`)
 
       const messages = (await deps.ctx.session.context({ sessionID })) as readonly MessageLike[]
       const outcome = extractWorkerOutcome(messages, {
@@ -219,7 +219,7 @@ export async function runWorker(deps: WorkerDeps, options: AgentOptions): Promis
 export function resolveMode(mode: string | undefined, label: string): WorkerMode {
   if (mode === undefined) return "agentic"
   if (mode === "agentic" || mode === "oneshot") return mode
-  throw new OdwError("bad-args", `未知 mode ${JSON.stringify(mode)}（worker ${label}）：可用 "agentic" 或 "oneshot"`)
+  throw new OdwError("bad-args", `unknown mode ${JSON.stringify(mode)} (worker ${label}): use "agentic" or "oneshot"`)
 }
 
 /**
@@ -239,8 +239,8 @@ export function resolveWorkerModel(
   if (options.effort !== undefined && options.model !== undefined) {
     throw new OdwError(
       "bad-args",
-      `worker ${label} 同时给了 model 和 effort：请只用其中一个（effort 是设置 model 的 #variant，` +
-        `两者并存会出现两处真相）`,
+      `worker ${label} was given both model and effort: use only one (effort sets the model's #variant,` +
+        `two sources of truth will disagree)`,
     )
   }
   if (options.effort === undefined && options.model === undefined) {
@@ -250,12 +250,12 @@ export function resolveWorkerModel(
   let ref: ModelRef
   if (options.effort !== undefined) {
     if (typeof options.effort !== "string" || options.effort.trim() === "") {
-      throw new OdwError("bad-args", `worker ${label} 的 effort 必须是非空字符串`)
+      throw new OdwError("bad-args", `worker ${label} needs effort to be a non-empty string`)
     }
     if (deps.defaultModel === null) {
       throw new OdwError(
         "bad-args",
-        `worker ${label} 只给了 effort 但没有可继承的默认模型，也无从判断 ${JSON.stringify(options.effort)} 是否合法：请显式给 model`,
+        `worker ${label} asked for effort but there is no default model to inherit, so ${JSON.stringify(options.effort)} cannot be checked: pass model explicitly`,
       )
     }
     ref = { ...deps.defaultModel, variant: options.effort.trim() }
@@ -267,7 +267,7 @@ export function resolveWorkerModel(
   if (deps.knownModels && deps.knownModels.size > 0 && !deps.knownModels.has(key)) {
     throw new OdwError(
       "bad-args",
-      `未知 model ${JSON.stringify(options.model ?? key)}（worker ${label}）：不在当前可用模型清单里`,
+      `unknown model ${JSON.stringify(options.model ?? key)} (worker ${label}): not in the available model list`,
     )
   }
 
@@ -277,7 +277,7 @@ export function resolveWorkerModel(
   if (allowed !== undefined && allowed.size > 0 && ref.variant !== "default" && !allowed.has(ref.variant)) {
     throw new OdwError(
       "bad-args",
-      `未知 variant ${JSON.stringify(ref.variant)}（worker ${label}，模型 ${key}）。可用：${[...allowed].sort().join(", ")}`,
+      `unknown variant ${JSON.stringify(ref.variant)} (worker ${label}, model ${key}). Available: ${[...allowed].sort().join(", ")}`,
     )
   }
 
@@ -305,7 +305,7 @@ async function waitForWorker(deps: WorkerDeps, sessionID: string, timeoutMs: num
     const result = await Promise.race([deps.ctx.session.wait({ sessionID }).then(() => "done" as const), timedOut])
     if (result === "timeout") {
       await deps.ctx.session.interrupt({ sessionID }).catch(() => undefined)
-      throw new OdwError("timeout", `worker ${label} 超过 ${Math.round(budgetMs)}ms 仍未结束，已中断该会话`)
+      throw new OdwError("timeout", `worker ${label} did not finish within ${Math.round(budgetMs)}ms; the session was interrupted`)
     }
   } finally {
     if (timer !== undefined) clearTimeout(timer)
@@ -314,6 +314,6 @@ async function waitForWorker(deps: WorkerDeps, sessionID: string, timeoutMs: num
 
 export function assertWorkerLimit(deps: WorkerDeps, ordinal: number): void {
   if (ordinal > deps.maxWorkers) {
-    throw new WorkerLimitError(`已达到 maxWorkers=${deps.maxWorkers}：本次运行不会再启动新的 worker`)
+    throw new WorkerLimitError(`maxWorkers=${deps.maxWorkers} reached: this run will not start more workers`)
   }
 }

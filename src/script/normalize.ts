@@ -33,7 +33,7 @@ const LEADING_EXPORT_DEFAULT = /^export\s+default\s+/
 export function normalizeScript(raw: string): string {
   let source = raw.trim()
   if (source === "") {
-    throw new SyntaxError("workflow 脚本为空")
+    throw new SyntaxError("workflow script is empty")
   }
   const head = skipLeadingComments(source)
   const match = LEADING_EXPORT_DEFAULT.exec(source.slice(head))

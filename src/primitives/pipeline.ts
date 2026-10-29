@@ -22,14 +22,14 @@ export function createPipelinePrimitive(deps: PrimitiveDeps) {
     ...stages: readonly PipelineStage[]
   ): Promise<R[]> {
     if (!Array.isArray(items)) {
-      throw new OdwError("bad-args", "ctx.pipeline(items, ...stages) 的 items 必须是数组")
+      throw new OdwError("bad-args", "ctx.pipeline(items, ...stages) needs items to be an array")
     }
     if (stages.length === 0) {
-      throw new OdwError("bad-args", "ctx.pipeline(items, ...stages) 至少需要一个 stage 函数")
+      throw new OdwError("bad-args", "ctx.pipeline(items, ...stages) needs at least one stage function")
     }
     for (const [index, stage] of stages.entries()) {
       if (typeof stage !== "function") {
-        throw new OdwError("bad-args", `ctx.pipeline 的第 ${index + 1} 个 stage 不是函数（收到 ${typeof stage}）`)
+        throw new OdwError("bad-args", `ctx.pipeline stage ${index + 1} is not a function (got ${typeof stage})`)
       }
     }
     if (items.length === 0) return []
@@ -41,7 +41,7 @@ export function createPipelinePrimitive(deps: PrimitiveDeps) {
     let stopped = false
     const limiter = new Semaphore(limit)
 
-    deps.log(`pipeline: ${items.length} 项 × ${stages.length} 阶段，并发 ${limit}`)
+    deps.log(`pipeline: ${items.length} items x ${stages.length} stages, concurrency ${limit}`)
 
     await Promise.all(
       items.map((item, index) =>
@@ -72,10 +72,10 @@ export function createPipelinePrimitive(deps: PrimitiveDeps) {
         .map((error) => (error instanceof Error ? error.message : String(error)))
         .slice(0, 3)
         .join(" | ")
-      throw new OdwError("internal", `pipeline 有 ${failures.length} 项失败（只抛第一个）：${names}`)
+      throw new OdwError("internal", `pipeline: ${failures.length} item(s) failed (only the first is thrown): ${names}`)
     }
     if (stopped) {
-      throw new OdwError("internal", "pipeline 被提前终止")
+      throw new OdwError("internal", "pipeline was terminated early")
     }
     return results
   }

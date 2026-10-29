@@ -105,8 +105,8 @@ describe("ctx.pipeline", () => {
   it("rejects bad arguments", async () => {
     const pipeline = createPipelinePrimitive(makeDeps())
     await expect(pipeline("nope" as unknown as number[], () => 1)).rejects.toBeInstanceOf(OdwError)
-    await expect(pipeline([1])).rejects.toThrow(/至少需要一个 stage/)
-    await expect(pipeline([1], "not a function" as unknown as () => unknown)).rejects.toThrow(/不是函数/)
+    await expect(pipeline([1])).rejects.toThrow(/at least one stage/)
+    await expect(pipeline([1], "not a function" as unknown as () => unknown)).rejects.toThrow(/is not a function/)
   })
 
   it("returns [] for zero items without charging a step", async () => {
@@ -272,10 +272,10 @@ describe("ctx.verify", () => {
 
   it("propagates a verifier worker failure as a throw (not as pass:false)", async () => {
     const agent = vi.fn(async () => {
-      throw new OdwError("worker-failed", "verifier 超时")
+      throw new OdwError("worker-failed", "verifier timed out")
     })
     const verify = createVerifyPrimitive(makeDeps(), agent)
-    await expect(verify("x")).rejects.toThrow("verifier 超时")
+    await expect(verify("x")).rejects.toThrow("verifier timed out")
   })
 })
 
@@ -284,13 +284,13 @@ describe("ctx surface", () => {
     const ctx = createRunContext(makeDeps())
     let caught: unknown
     try {
-      ctx.abort("前置检查没通过")
+      ctx.abort("precondition check failed")
     } catch (error) {
       caught = error
     }
     expect(caught).toBeInstanceOf(WorkflowAbortedError)
     expect((caught as WorkflowAbortedError).kind).toBe("aborted")
-    expect((caught as WorkflowAbortedError).message).toContain("前置检查没通过")
+    expect((caught as WorkflowAbortedError).message).toContain("precondition check failed")
   })
 
   it("ctx.abort works without a reason", () => {

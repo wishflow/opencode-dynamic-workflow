@@ -27,8 +27,8 @@ export function inSetup(): boolean {
 export function assertNoModelCall(what: string): void {
   if (setupDepth > 0) {
     throw new SetupModelCallError(
-      `setup 阶段禁止发起模型调用（${what}）：在 opencode 2.1.0 上会把宿主 server 挂死。` +
-        `请把编排放在 tool / command / hook 里（PLAN.md §3.7）。`,
+      `Model calls are not allowed during setup (${what}): on opencode 2.1.0 they hang the host server.` +
+        `Put the orchestration in a tool, command or hook instead.`,
     )
   }
 }

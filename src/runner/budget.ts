@@ -44,8 +44,8 @@ export class Budget {
   }
 
   describeLimit(): string {
-    if (this.limitUsd === null) return "无预算上限"
-    return `budgetUsd=${this.limitUsd}，已花 $${this.costUsd.toFixed(4)}`
+    if (this.limitUsd === null) return "no budget limit"
+    return `budgetUsd=${this.limitUsd}, spent $${this.costUsd.toFixed(4)}`
   }
 
   snapshot(): BudgetSnapshot {

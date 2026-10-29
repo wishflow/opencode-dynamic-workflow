@@ -17,7 +17,7 @@ export class Semaphore {
   private readonly waiters: Array<() => void> = []
 
   constructor(limit: number) {
-    if (!Number.isFinite(limit) || limit < 1) throw new RangeError(`semaphore limit 必须 >= 1，收到 ${limit}`)
+    if (!Number.isFinite(limit) || limit < 1) throw new RangeError(`semaphore limit must be >= 1, got ${limit}`)
     this.limit = Math.floor(limit)
   }
 

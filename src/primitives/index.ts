@@ -50,7 +50,7 @@ export function createRunContext(deps: PrimitiveDeps): RunContext {
     verify,
     checkpoint: async (label: string, data?: unknown) => {
       if (typeof label !== "string" || label.trim() === "") {
-        throw new Error("ctx.checkpoint(label, data?) 的 label 必须是非空字符串")
+        throw new Error("ctx.checkpoint(label, data?) needs label to be a non-empty string")
       }
       deps.steps.claim("ctx.checkpoint")
       deps.checkpoint(label.trim(), data)
@@ -61,7 +61,7 @@ export function createRunContext(deps: PrimitiveDeps): RunContext {
       // run. Returning instead would let a caller keep dispatching workers after
       // asking to stop.
       throw new WorkflowAbortedError(
-        typeof reason === "string" && reason.trim() !== "" ? `脚本主动中止：${reason.trim()}` : "脚本主动中止",
+        typeof reason === "string" && reason.trim() !== "" ? `script aborted deliberately: ${reason.trim()}` : "script aborted deliberately",
       )
     },
     log: (...args: unknown[]) => {
@@ -73,7 +73,7 @@ export function createRunContext(deps: PrimitiveDeps): RunContext {
     },
     phase: (name: string) => {
       if (typeof name !== "string" || name.trim() === "") {
-        throw new Error("ctx.phase(name) 的 name 必须是非空字符串")
+        throw new Error("ctx.phase(name) needs name to be a non-empty string")
       }
       deps.steps.claim("ctx.phase")
       deps.phase(name.trim())

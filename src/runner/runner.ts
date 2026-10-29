@@ -161,7 +161,7 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
       // `runWorker`: a refused worker never started, so it must not appear in
       // the run's worker count/summary.
       if (workersStarted + 1 > maxWorkers) {
-        throw new WorkerLimitError(`已达到 maxWorkers=${maxWorkers}：本次运行不会再启动新的 worker`)
+        throw new WorkerLimitError(`maxWorkers=${maxWorkers} reached: this run will not start more workers`)
       }
       workersStarted += 1
       return workersStarted
@@ -310,7 +310,7 @@ export async function runWorkflow(deps: RunWorkflowDeps, input: RunWorkflowInput
   await deps.ctx.session
     .synthetic({
       sessionID: deps.sessionID,
-      text: `[odw ${runId}] ${status === "ok" ? "✅ 完成" : "❌ 失败"}：${workersStarted} workers，${failed.length} 失败，${(elapsedMs / 1000).toFixed(1)}s，$${snapshot.cost.toFixed(4)}`,
+      text: `[odw ${runId}] ${status === "ok" ? "✅ done" : "❌ failed"}: ${workersStarted} workers, ${failed.length} failed, ${(elapsedMs / 1000).toFixed(1)}s, $${snapshot.cost.toFixed(4)}`,
     })
     .catch(() => undefined)
 
@@ -336,18 +336,18 @@ export function resolveScriptSource(input: RunWorkflowInput, directory: string):
 
   const file = typeof input.file === "string" ? input.file.trim() : ""
   if (file === "") {
-    throw new OdwError("bad-args", "必须提供 script（内联源码）或 file（workflows/ 下的脚本路径）")
+    throw new OdwError("bad-args", "provide either script (inline source) or file (a path under workflows/)")
   }
   const base = resolve(directory, WORKFLOW_DIR)
   const path = isAbsolute(file) ? resolve(file) : resolve(base, file)
   if (!isAbsolute(file) && path !== base && !path.startsWith(base + sep)) {
-    throw new OdwError("bad-args", `file 必须位于 ${WORKFLOW_DIR}/ 之内（收到 ${JSON.stringify(file)}）`)
+    throw new OdwError("bad-args", `file must live under ${WORKFLOW_DIR}/ (got ${JSON.stringify(file)})`)
   }
   try {
     return { source: readFileSync(path, "utf8"), origin: { kind: "file", path } }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    throw new OdwError("bad-args", `无法读取脚本 ${path}：${detail}`)
+    throw new OdwError("bad-args", `cannot read script ${path}: ${detail}`)
   }
 }
 
@@ -379,14 +379,14 @@ async function runScriptWithWallClock(
     timer = setTimeout(() => {
       resolve({
         status: "error",
-        error: { kind: "timeout", message: `workflow 超过 ${options.timeoutMs}ms，已放弃等待（脚本被中止）` },
+        error: { kind: "timeout", message: `workflow exceeded ${options.timeoutMs}ms; gave up waiting and aborted the script` },
         elapsedMs: options.timeoutMs,
       })
     }, options.timeoutMs)
     onAbort = () => {
       resolve({
         status: "error",
-        error: { kind: "aborted", message: "workflow 已被取消" },
+        error: { kind: "aborted", message: "workflow was cancelled" },
         elapsedMs: Date.now() - startedAt,
       })
     }
@@ -587,7 +587,7 @@ function resolveRunId(input: string | undefined): string {
   const provided = typeof input === "string" ? input.trim() : ""
   if (provided !== "") {
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(provided)) {
-      throw new OdwError("bad-args", `runId 只允许 [A-Za-z0-9._-]，长度 1..64（收到 ${JSON.stringify(input)}）`)
+      throw new OdwError("bad-args", `runId allows only [A-Za-z0-9._-], 1..64 chars (got ${JSON.stringify(input)})`)
     }
     return provided
   }
@@ -635,42 +635,42 @@ type SummaryStats = {
 
 function summarizeOk(runId: string, returnValue: unknown, stats: SummaryStats): string {
   const lines = [
-    `ODW run ${runId} 完成 ✅`,
-    `- workers: 启动 ${stats.started}，失败 ${stats.failed}`,
-    `- 耗时: ${(stats.elapsedMs / 1000).toFixed(1)}s，花费: $${stats.cost.toFixed(4)}（${(stats.tokens ?? 0).toLocaleString()} tok）`,
-    `- 现场: ${stats.artifactsDir}`,
+    `ODW run ${runId} finished ✅`,
+    `- workers: ${stats.started} started, ${stats.failed} failed`,
+    `- elapsed: ${(stats.elapsedMs / 1000).toFixed(1)}s, cost: $${stats.cost.toFixed(4)} (${(stats.tokens ?? 0).toLocaleString()} tok)`,
+    `- artifacts: ${stats.artifactsDir}`,
   ]
   const rendered = truncateValue(returnValue)
   if (rendered !== undefined) {
-    lines.push("- 脚本返回值:", "```", typeof rendered === "string" ? rendered : JSON.stringify(rendered, null, 2), "```")
+    lines.push("- script return value:", "```", typeof rendered === "string" ? rendered : JSON.stringify(rendered, null, 2), "```")
   }
   return cap(lines.join("\n"))
 }
 
 function summarizeError(runId: string, error: ScriptError, stats: SummaryStats): string {
   const lines = [
-    `ODW run ${runId} 失败 ❌`,
-    `- 错误类型: ${error.kind}`,
-    `- 错误信息: ${error.message}`,
-    `- 已启动 workers: ${stats.started}（失败 ${stats.failed}）`,
-    `- 耗时: ${(stats.elapsedMs / 1000).toFixed(1)}s，花费: $${stats.cost.toFixed(4)}`,
-    `- 现场: ${stats.artifactsDir}`,
+    `ODW run ${runId} failed ❌`,
+    `- error kind: ${error.kind}`,
+    `- error: ${error.message}`,
+    `- workers started: ${stats.started} (${stats.failed} failed)`,
+    `- elapsed: ${(stats.elapsedMs / 1000).toFixed(1)}s, cost: $${stats.cost.toFixed(4)}`,
+    `- artifacts: ${stats.artifactsDir}`,
   ]
   return cap(lines.join("\n"))
 }
 
 function truncateValue(value: unknown, limit = 2_000): unknown {
   if (value === undefined) return undefined
-  if (typeof value === "string") return value.length > limit ? `${value.slice(0, limit)}…（已截断）` : value
+  if (typeof value === "string") return value.length > limit ? `${value.slice(0, limit)}… (truncated)` : value
   try {
     const json = JSON.stringify(value, null, 2)
     if (json === undefined) return String(value)
-    return json.length > limit ? `${json.slice(0, limit)}…（已截断）` : value
+    return json.length > limit ? `${json.slice(0, limit)}… (truncated)` : value
   } catch {
     return String(value)
   }
 }
 
 function cap(text: string, limit = 6_000): string {
-  return text.length > limit ? `${text.slice(0, limit)}\n…（已截断）` : text
+  return text.length > limit ? `${text.slice(0, limit)}\n… (truncated)` : text
 }

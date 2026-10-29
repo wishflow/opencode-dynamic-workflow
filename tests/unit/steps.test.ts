@@ -32,6 +32,6 @@ describe("Steps", () => {
     expect(caught).toBeInstanceOf(StepLimitError)
     expect((caught as StepLimitError).kind).toBe("step-limit")
     expect((caught as StepLimitError).message).toContain("ctx.parallel")
-    expect((caught as StepLimitError).message).toContain("第 2 步")
+    expect((caught as StepLimitError).message).toContain("step 2")
   })
 })

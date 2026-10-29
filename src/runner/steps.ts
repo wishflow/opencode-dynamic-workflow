@@ -31,8 +31,8 @@ export class Steps {
     this.used += 1
     if (this.used > this.max) {
       throw new StepLimitError(
-        `原语调用步数超过上限 ${this.max}（在第 ${this.used} 步「${what}」）：脚本疑似失控，已中止。` +
-          `把批量工作交给 ctx.parallel / ctx.pipeline，而不是在脚本里写长循环。`,
+        `primitive call budget exceeded (${this.max}), broken on step ${this.used} ("${what}"): the script looks runaway, so the run was aborted.` +
+          `Hand batch work to ctx.parallel / ctx.pipeline instead of writing long loops.`,
       )
     }
   }

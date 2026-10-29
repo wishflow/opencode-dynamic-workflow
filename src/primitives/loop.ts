@@ -19,20 +19,20 @@ import { OdwError, type LoopOptions, type LoopState } from "../types.ts"
 export function createLoopPrimitive(deps: PrimitiveDeps) {
   return async function loop<S = unknown>(options: LoopOptions<S>): Promise<LoopState<S>> {
     if (options === null || typeof options !== "object") {
-      throw new OdwError("bad-args", "ctx.loop({ max, body, until? }) 需要一个对象参数")
+      throw new OdwError("bad-args", "ctx.loop({ max, body, until? }) needs an object argument")
     }
     const requested = options.max
     if (typeof requested !== "number" || !Number.isFinite(requested) || requested < 1) {
       throw new OdwError(
         "bad-args",
-        `ctx.loop 的 max 必须是 >= 1 的整数（收到 ${JSON.stringify(requested)}）：没有上限的循环不允许`,
+        `ctx.loop needs max to be an integer >= 1 (got ${JSON.stringify(requested)}): unbounded loops are not allowed`,
       )
     }
     if (typeof options.body !== "function") {
-      throw new OdwError("bad-args", "ctx.loop 的 body 必须是函数 (state, i) => newState")
+      throw new OdwError("bad-args", "ctx.loop needs body to be a function (state, i) => newState")
     }
     if (options.until !== undefined && typeof options.until !== "function") {
-      throw new OdwError("bad-args", "ctx.loop 的 until 必须是函数 (state, i) => boolean")
+      throw new OdwError("bad-args", "ctx.loop needs until to be a function (state, i) => boolean")
     }
 
     const limit = Math.floor(requested)
@@ -44,16 +44,16 @@ export function createLoopPrimitive(deps: PrimitiveDeps) {
     while (iterations < limit) {
       // Checked per iteration, not only per `loop` call: a body that awaits a
       // worker each turn is exactly the case the wall clock is there to stop.
-      deps.deadline.check(`loop 第 ${iterations + 1} 次迭代（上限 ${limit}）`)
+      deps.deadline.check(`loop iteration ${iterations + 1} (limit ${limit})`)
       state = await options.body(state, iterations)
       iterations += 1
       if (until !== undefined && until(state, iterations - 1)) {
-        deps.log(`loop: 第 ${iterations} 次迭代后 until 成立，提前结束（上限 ${limit}）`)
+        deps.log(`loop: until became true after ${iterations} iterations, stopping early (limit ${limit})`)
         return { iterations, state, stopped: "until" }
       }
     }
 
-    deps.log(`loop: 用满上限 ${limit} 次迭代，until 未成立`)
+    deps.log(`loop: used all ${limit} iterations and until never became true`)
     return { iterations, state, stopped: "max" }
   }
 }

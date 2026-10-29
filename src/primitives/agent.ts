@@ -20,10 +20,10 @@ export function createAgentPrimitive(deps: PrimitiveDeps) {
 
   return async function agent<T = string>(options: AgentOptions): Promise<T> {
     if (options === null || typeof options !== "object") {
-      throw new OdwError("bad-args", "ctx.agent(options) 需要一个对象参数")
+      throw new OdwError("bad-args", "ctx.agent(options) needs an object argument")
     }
     if (typeof options.prompt !== "string" || options.prompt.trim() === "") {
-      throw new OdwError("bad-args", "ctx.agent({ prompt }) 的 prompt 必须是非空字符串")
+      throw new OdwError("bad-args", "ctx.agent({ prompt }) needs prompt to be a non-empty string")
     }
 
     sequence += 1

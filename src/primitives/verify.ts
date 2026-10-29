@@ -44,10 +44,10 @@ export function createVerifyPrimitive(deps: PrimitiveDeps, agent: (options: Agen
   return async function verify(claim: string | VerifyOptions): Promise<VerifyResult> {
     const options: VerifyOptions = typeof claim === "string" ? { claim } : (claim ?? {})
     if (typeof options.claim !== "string" || options.claim.trim() === "") {
-      throw new OdwError("bad-args", "ctx.verify(claim) 的 claim 必须是非空字符串")
+      throw new OdwError("bad-args", "ctx.verify(claim) needs claim to be a non-empty string")
     }
     if (options.evidence !== undefined && typeof options.evidence !== "string") {
-      throw new OdwError("bad-args", "ctx.verify({ evidence }) 的 evidence 必须是字符串")
+      throw new OdwError("bad-args", "ctx.verify({ evidence }) needs evidence to be a string")
     }
 
     sequence += 1
@@ -85,7 +85,7 @@ function buildVerifierPrompt(claim: string, evidence: string | undefined): strin
     "- If a needed file, command or fact is missing, say so and return pass=false.",
     "",
     'Answer with JSON only, no prose outside it: {"pass": boolean, "reasons": string[]}',
-    "Each reason must be concrete: the file, command or observation behind it, or - when you could not verify - a reason starting with `无法验证：`.",
+    "Each reason must be concrete: the file, command or observation behind it, or - when you could not verify - a reason starting with `unverifiable:`.",
     "",
     "CLAIM:",
     claim.trim(),
@@ -107,7 +107,7 @@ function normalizeVerdict(answer: unknown): VerifyResult {
   if (record === null || typeof record["pass"] !== "boolean") {
     return {
       pass: false,
-      reasons: ["verifier 未返回可解析的 {pass, reasons} 判定，按未通过处理"],
+      reasons: ["the verifier did not return a parseable {pass, reasons} verdict; treating it as not passed"],
       ...(raw !== undefined ? { raw: truncate(raw) } : {}),
     }
   }
@@ -121,5 +121,5 @@ function normalizeVerdict(answer: unknown): VerifyResult {
 }
 
 function truncate(text: string): string {
-  return text.length > MAX_REASON_CHARS ? `${text.slice(0, MAX_REASON_CHARS)}…（已截断）` : text
+  return text.length > MAX_REASON_CHARS ? `${text.slice(0, MAX_REASON_CHARS)}… (truncated)` : text
 }

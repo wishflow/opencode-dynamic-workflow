@@ -123,7 +123,7 @@ export function parseRunInput(input: unknown): RunWorkflowInput {
   const file = optionalString(record["file"], "file")
   if (file !== undefined) out.file = file
   if (script === undefined && file === undefined) {
-    throw new OdwError("bad-args", "必须提供 script（内联源码）或 file（workflows/ 下的脚本路径）")
+    throw new OdwError("bad-args", "provide either script (inline source) or file (a path under workflows/)")
   }
 
   const runId = optionalString(record["runId"], "runId")
@@ -146,23 +146,23 @@ export function parseRunInput(input: unknown): RunWorkflowInput {
 
 function optionalString(value: unknown, name: string): string | undefined {
   if (value === undefined || value === null) return undefined
-  if (typeof value !== "string") throw new OdwError("bad-args", `${name} 必须是字符串`)
+  if (typeof value !== "string") throw new OdwError("bad-args", `${name} must be a string`)
   const trimmed = value.trim()
   return trimmed === "" ? undefined : trimmed
 }
 
 function optionalInt(value: unknown, name: string, min: number, max: number): number | undefined {
   if (value === undefined || value === null) return undefined
-  if (typeof value !== "number" || !Number.isFinite(value)) throw new OdwError("bad-args", `${name} 必须是数字`)
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new OdwError("bad-args", `${name} must be a number`)
   const int = Math.floor(value)
-  if (int < min || int > max) throw new OdwError("bad-args", `${name} 必须在 ${min}..${max} 之间（收到 ${value}）`)
+  if (int < min || int > max) throw new OdwError("bad-args", `${name} must be between ${min} and ${max} (got ${value})`)
   return int
 }
 
 function optionalNumber(value: unknown, name: string): number | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw new OdwError("bad-args", `${name} 必须是非正数以外的数字`)
+    throw new OdwError("bad-args", `${name} must be a positive number`)
   }
   return value
 }

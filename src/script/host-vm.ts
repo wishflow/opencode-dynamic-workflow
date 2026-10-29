@@ -77,7 +77,7 @@ export class VmScriptHost implements ScriptHost {
   private aborted(started: number): ScriptResult {
     return {
       status: "error",
-      error: { kind: "aborted", message: "workflow 已被取消" },
+      error: { kind: "aborted", message: "workflow was cancelled" },
       elapsedMs: Date.now() - started,
     }
   }
@@ -89,7 +89,7 @@ function classify(error: unknown): ScriptError {
   }
   const message = error instanceof Error ? error.message : String(error)
   if (/Script execution timed out/i.test(message)) {
-    return { kind: "timeout", message: `脚本同步段超出时间预算：${message}` }
+    return { kind: "timeout", message: `the script's synchronous section exceeded its time budget: ${message}` }
   }
   return toScriptError(error)
 }

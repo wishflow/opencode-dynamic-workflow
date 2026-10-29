@@ -284,7 +284,7 @@ export class WorkerFailedError extends OdwError {
   readonly outcome: WorkerOutcome
 
   constructor(outcome: WorkerOutcome) {
-    super("worker-failed", `worker ${outcome.label} 失败（${outcome.failure?.kind ?? "unknown"}）：${outcome.failure?.message ?? ""}`)
+    super("worker-failed", `worker ${outcome.label} failed (${outcome.failure?.kind ?? "unknown"}): ${outcome.failure?.message ?? ""}`)
     this.outcome = outcome
   }
 }

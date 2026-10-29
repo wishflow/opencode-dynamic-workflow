@@ -43,8 +43,8 @@ describe("resolveMode", () => {
     // A silent fallback would run a full agentic worker where the script asked for
     // a cheap one - the exact opposite of what the mode means.
     expect(() => resolveMode("single", "w")).toThrow(OdwError)
-    expect(() => resolveMode("ONE SHOT", "w")).toThrow(/未知 mode/)
-    expect(() => resolveMode("", "w")).toThrow(/未知 mode/)
+    expect(() => resolveMode("ONE SHOT", "w")).toThrow(/unknown mode/)
+    expect(() => resolveMode("", "w")).toThrow(/unknown mode/)
   })
 })
 
@@ -78,18 +78,18 @@ describe("resolveWorkerModel", () => {
   it("refuses `model` and `effort` together rather than picking a winner", () => {
     const deps = makeWorkerDeps()
     expect(() => resolveWorkerModel(deps, { prompt: "x", model: "compass/other-model", effort: "high" }, "w")).toThrow(
-      /同时给了 model 和 effort/,
+      /both model and effort/,
     )
   })
 
   it("refuses `effort` when there is no inherited model to apply it to", () => {
     const deps = makeWorkerDeps({ defaultModel: null })
-    expect(() => resolveWorkerModel(deps, { prompt: "x", effort: "high" }, "w")).toThrow(/没有可继承的默认模型/)
+    expect(() => resolveWorkerModel(deps, { prompt: "x", effort: "high" }, "w")).toThrow(/no default model to inherit/)
   })
 
   it("rejects an unknown model, naming the worker", () => {
     const deps = makeWorkerDeps()
-    expect(() => resolveWorkerModel(deps, { prompt: "x", model: "nope/nope" }, "w")).toThrow(/未知 model/)
+    expect(() => resolveWorkerModel(deps, { prompt: "x", model: "nope/nope" }, "w")).toThrow(/unknown model/)
     try {
       resolveWorkerModel(deps, { prompt: "x", model: "nope/nope" }, "labelled")
     } catch (error) {
@@ -103,7 +103,7 @@ describe("resolveWorkerModel", () => {
     })
     expect(resolveWorkerModel(deps, { prompt: "x", model: "compass/other-model#high" }, "w").ref?.variant).toBe("high")
     expect(() => resolveWorkerModel(deps, { prompt: "x", model: "compass/other-model#max" }, "w")).toThrow(
-      /未知 variant "max"/,
+      /unknown variant "max"/,
     )
     expect(() => resolveWorkerModel(deps, { prompt: "x", effort: "max" }, "w")).not.toThrow()
   })

@@ -60,7 +60,7 @@ export async function planWorkflow(deps: PlanDeps, input: RunWorkflowInput): Pro
     compiled = true
   } catch (error) {
     syntaxError = error instanceof Error ? error.message : String(error)
-    problems.push(`脚本无法编译：${syntaxError}`)
+    problems.push(`script does not compile: ${syntaxError}`)
   }
 
   const callsites = scanWorkerCalls(source)
@@ -68,37 +68,37 @@ export async function planWorkflow(deps: PlanDeps, input: RunWorkflowInput): Pro
   const inventory = await loadInventory({ ctx: deps.ctx, sessionID: deps.sessionID, directory: deps.directory, signal: new AbortController().signal })
 
   for (const site of callsites) {
-    const where = `第 ${site.line} 行 ${site.primitive}`
+    const where = `line ${site.line} ${site.primitive}`
     // Literal fields are validated even when the site is `dynamic`: a literal
     // `agent: "explor"` next to a dynamic `evidence` expression is still a typo
     // worth catching, and skipping it would be a false pass.
     if (site.agent !== undefined) {
       if (inventory.knownAgents !== null && !inventory.knownAgents.has(site.agent)) {
-        problems.push(`${where}: 未知 agent ${JSON.stringify(site.agent)}（可用：${[...inventory.knownAgents].join(", ")}）`)
+        problems.push(`${where}: unknown agent ${JSON.stringify(site.agent)} (available: ${[...inventory.knownAgents].join(", ")})`)
       }
     }
     if (site.model !== undefined && inventory.knownModels !== null) {
       const bare = site.model.split("#")[0] ?? site.model
       if (!inventory.knownModels.has(bare)) {
-        problems.push(`${where}: 未知 model ${JSON.stringify(site.model)}（应为 "provider/model"，可用数量 ${inventory.knownModels.size}）`)
+        problems.push(`${where}: unknown model ${JSON.stringify(site.model)} (expected "provider/model"; ${inventory.knownModels.size} available)`)
       }
     }
     if (site.permissions !== undefined && !KNOWN_PERMISSIONS.has(site.permissions)) {
-      problems.push(`${where}: 未知 permissions ${JSON.stringify(site.permissions)}（可用：inherit, read-only, dangerous-full-access）`)
+      problems.push(`${where}: unknown permissions ${JSON.stringify(site.permissions)} (available: inherit, read-only, dangerous-full-access)`)
     }
     if (site.mode !== undefined) {
       if (!KNOWN_MODES.has(site.mode)) {
-        problems.push(`${where}: 未知 mode ${JSON.stringify(site.mode)}（可用：agentic, oneshot）`)
+        problems.push(`${where}: unknown mode ${JSON.stringify(site.mode)} (available: agentic, oneshot)`)
       } else if (site.mode === "oneshot") {
         warnings.push(
-          `${where}: mode "oneshot" 会拒绝该 worker 的**所有**工具（包括读文件）：答案只能来自 prompt 本身，` +
-            `别让它去查代码库`,
+          `${where}: mode "oneshot" denies the worker **every** tool (including reading files): its answer can only come from the prompt,` +
+            `so do not ask it to look at the codebase`,
         )
       }
     }
     if (site.effort !== undefined && site.model !== undefined) {
       problems.push(
-        `${where}: 同时给了 model 和 effort：effort 就是 model 的 #variant，两者并存会出现两处真相，请只用其一`,
+        `${where}: both model and effort were given: effort is just the model's #variant and two sources of truth disagree, so pass only one`,
       )
     }
     if (site.effort !== undefined || site.model !== undefined) {
@@ -110,21 +110,21 @@ export async function planWorkflow(deps: PlanDeps, input: RunWorkflowInput): Pro
         const allowed = inventory.modelVariants?.get(key)
         if (allowed !== undefined && allowed.size > 0 && !allowed.has(variant)) {
           problems.push(
-            `${where}: 未知 variant ${JSON.stringify(variant)}（模型 ${key}）。可用：${[...allowed].sort().join(", ")}`,
+            `${where}: unknown variant ${JSON.stringify(variant)} (model ${key}). Available: ${[...allowed].sort().join(", ")}`,
           )
         }
       }
       if (variant !== null && key !== null && inventory.modelVariants?.get(key) === undefined) {
-        warnings.push(`${where}: 宿主没有上报模型 ${key} 的 variant 清单，${JSON.stringify(variant)} 无法在计划阶段校验`)
+        warnings.push(`${where}: the host did not report a variant list for model ${key}, so ${JSON.stringify(variant)} cannot be checked at plan time`)
       }
     }
     if (site.dynamic) {
       warnings.push(
-        `${where}: 部分参数不是字面量（动态），只能校验上面列出的字面量字段；agent/model/mode/permissions 里出现的动态值不会在此检查`,
+        `${where}: some arguments are not literals (dynamic), so only the literal fields above could be checked; dynamic values in agent/model/mode/permissions are not checked here`,
       )
     }
     if (site.primitive === "ctx.verify" && site.permissions === undefined) {
-      warnings.push(`${where}: 未指定 permissions，verify 默认 read-only（符合预期）`)
+      warnings.push(`${where}: no permissions given; verify defaults to read-only (as expected)`)
     }
   }
 
@@ -132,22 +132,22 @@ export async function planWorkflow(deps: PlanDeps, input: RunWorkflowInput): Pro
   const dynamicSites = callsites.length - literalSites
   if (dynamicSites > 0) {
     warnings.push(
-      `有 ${dynamicSites} 个 worker 调用点参数是动态的：真实 worker 数量由运行期决定，` +
-        `上限只会被 maxWorkers/concurrency/budgetUsd 拦住，无法在计划阶段估算`,
+      `${dynamicSites} worker call site(s) have dynamic arguments: the real worker count is decided at runtime,` +
+        `so only maxWorkers/concurrency/budgetUsd can cap it and it cannot be estimated at plan time`,
     )
   }
   if (callsites.length === 0 && compiled) {
-    warnings.push("脚本里没有文本可见的 ctx.agent / ctx.verify 调用：本次运行可能不会产生任何 worker（不花钱，也可能什么都没做）")
+    warnings.push("no textual ctx.agent / ctx.verify call found in the script: this run may start no worker at all (it costs nothing, and may do nothing)")
   }
   if (/ctx\.agent|ctx\.verify/.test(source) && callsites.length === 0) {
-    warnings.push("源码里出现了 ctx.agent/ctx.verify 字样但未解析出调用点：可能写在字符串/模板里，或写法不被静态扫描支持")
+    warnings.push("the source mentions ctx.agent/ctx.verify but no call site could be parsed: it may sit inside a string or template, or be written in a way the static scan does not support")
   }
 
   const concurrency = clampInt(input.concurrency ?? DEFAULTS.concurrency, 1, DEFAULTS.maxConcurrency)
   const timeoutMs = clampInt(input.timeoutMs ?? DEFAULTS.timeoutMs, 1_000, 24 * 60 * 60 * 1000)
   const maxWorkers = clampInt(input.maxWorkers ?? DEFAULTS.maxWorkers, 1, 10_000)
   if (input.budgetUsd !== undefined && input.budgetUsd <= 0) {
-    problems.push(`budgetUsd 必须大于 0（收到 ${input.budgetUsd}）`)
+    problems.push(`budgetUsd must be greater than 0 (got ${input.budgetUsd})`)
   }
 
   const ok = problems.length === 0
@@ -518,11 +518,11 @@ function summarize(metadata: Record<string, unknown>, problems: string[], warnin
   const params = metadata["params"] as Record<string, unknown>
   const origin = metadata["origin"] as { kind: string; path?: string }
   const lines = [
-    `ODW plan（dry run，未执行、未花钱）${problems.length === 0 ? " ✅" : " ❌"}`,
-    `- 脚本: ${origin.kind === "file" ? origin.path : "inline"}（${metadata["scriptChars"]} 字符）`,
-    `- 编译: ${metadata["compiled"] === true ? "通过（仅编译，未调用）" : "失败"}`,
-    `- 参数: concurrency=${params["concurrency"]}, timeoutMs=${params["timeoutMs"]}, maxWorkers=${params["maxWorkers"]}, maxSteps=${params["maxSteps"]}, budgetUsd=${String(params["budgetUsd"] ?? "不限")}`,
-    `- 静态可见 worker 调用点: ${metadata["literalCallsites"]} 个（动态：${metadata["dynamicCallsites"]} 个）`,
+    `ODW plan (dry run: nothing was executed, nothing was spent)${problems.length === 0 ? " ✅" : " ❌"}`,
+    `- script: ${origin.kind === "file" ? origin.path : "inline"} (${metadata["scriptChars"]} chars)`,
+    `- compiled: ${metadata["compiled"] === true ? "ok (compiled only, nothing was called)" : "failed"}`,
+    `- params: concurrency=${params["concurrency"]}, timeoutMs=${params["timeoutMs"]}, maxWorkers=${params["maxWorkers"]}, maxSteps=${params["maxSteps"]}, budgetUsd=${String(params["budgetUsd"] ?? "unlimited")}`,
+    `- statically visible worker call sites: ${metadata["literalCallsites"]} (dynamic: ${metadata["dynamicCallsites"]})`,
   ]
   const variantMap = metadata["modelVariants"] as Record<string, string[]> | null
   if (variantMap !== null) {
@@ -531,18 +531,18 @@ function summarize(metadata: Record<string, unknown>, problems: string[], warnin
       .slice(0, 3)
       .map(([key, list]) => `${key}[${list.join(",")}]`)
       .join(" ")
-    lines.push(`- variant 清单: ${total} 个模型有上报${sample === "" ? "" : `（例：${sample}）`}`)
+    lines.push(`- variant lists: ${total} model(s) reported${sample === "" ? "" : ` (e.g. ${sample})`}`)
   } else {
-    lines.push("- variant 清单: 宿主未上报（model 的 #variant / effort 无法在计划阶段校验）")
+    lines.push("- variant lists: none reported by the host (model #variant / effort cannot be checked at plan time)")
   }
   const sites = metadata["workerCallsites"] as Array<Record<string, unknown>>
   if (sites.length > 0) {
-    lines.push("- 调用点:")
+    lines.push("- call sites:")
     for (const site of sites) {
       const bits = [
         `line ${site["line"]}`,
         String(site["primitive"]),
-        site["dynamic"] === true ? "参数动态" : "",
+        site["dynamic"] === true ? "dynamic args" : "",
         site["agent"] !== null && site["agent"] !== undefined ? `agent=${String(site["agent"])}` : "",
         site["model"] !== null && site["model"] !== undefined ? `model=${String(site["model"])}` : "",
         site["effort"] !== null && site["effort"] !== undefined ? `effort=${String(site["effort"])}` : "",
@@ -555,13 +555,13 @@ function summarize(metadata: Record<string, unknown>, problems: string[], warnin
     }
   }
   if (problems.length > 0) {
-    lines.push("", "## 必须先修的问题")
+    lines.push("", "## Problems to fix first")
     for (const problem of problems) lines.push(`- ${problem}`)
   }
   if (warnings.length > 0) {
-    lines.push("", "## 提醒（不阻塞）")
+    lines.push("", "## Notes (non-blocking)")
     for (const warning of warnings) lines.push(`- ${warning}`)
   }
-  lines.push("", "计划通过不等于运行成功：静态扫描只读字面量，动态分支与运行期失败它看不到。")
+  lines.push("", "A passing plan is not a passing run: the static scan reads only literals, so it cannot see dynamic branches or runtime failures.")
   return lines.join("\n")
 }

@@ -50,7 +50,7 @@ export function resolvePermissions(spec: PermissionSpec | undefined): readonly P
   if (Array.isArray(spec)) {
     return spec.length === 0 ? undefined : (spec as readonly PermissionRule[])
   }
-  throw new TypeError(`未知的 permissions：${JSON.stringify(spec)}`)
+  throw new TypeError(`unknown permissions: ${JSON.stringify(spec)}`)
 }
 
 /**

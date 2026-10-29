@@ -33,7 +33,7 @@ export class Deadline {
 
   check(what: string): void {
     if (this.expired()) {
-      throw new WorkflowTimeoutError(`${what} 之前已超时：脚本 wall-clock 预算已用完（${what} 未开始或未完成）`)
+      throw new WorkflowTimeoutError(`${what} arrived after the deadline: the script's wall-clock budget is used up (${what} did not start or did not finish)`)
     }
   }
 }

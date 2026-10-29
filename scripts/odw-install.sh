@@ -134,11 +134,11 @@ detect_repo() {
 detect_repo || true
 
 NODE="${ODW_NODE:-node}"
-command -v "$NODE" >/dev/null 2>&1 || die "需要 node 来读写 JSON（可用 ODW_NODE 指定其它可执行文件）"
+command -v "$NODE" >/dev/null 2>&1 || die "node is required to read and write JSON (set ODW_NODE to use a different executable)"
 # Being on PATH is not the same as being runnable: a broken Homebrew node (missing dylib)
 # exists but aborts on every call, which would kill the script after it had already started
 # mutating state. Fail before the first mutation instead.
-"$NODE" -e 'process.exit(0)' >/dev/null 2>&1 || die "$NODE 存在但无法执行（可用 ODW_NODE 指定其它可执行文件）"
+"$NODE" -e 'process.exit(0)' >/dev/null 2>&1 || die "$NODE exists but cannot be executed (set ODW_NODE to use a different executable)"
 
 sha256_of() {
   if command -v shasum >/dev/null 2>&1; then
@@ -150,12 +150,12 @@ sha256_of() {
 
 require_manifest() {
   if [ ! -f "$MANIFEST" ]; then
-    die "没有安装清单 $MANIFEST —— 先 install"
+    die "no install manifest at $MANIFEST - run install first"
   fi
 }
 
 require_opencode() {
-  command -v opencode >/dev/null 2>&1 || die "PATH 里没有 opencode"
+  command -v opencode >/dev/null 2>&1 || die "opencode is not on PATH"
 }
 
 # ---------------------------------------------------------------- skill
@@ -164,11 +164,11 @@ write_skill() {
   mkdir -p "$(dirname "$SKILL_FILE")"
   if [ -n "$REPO_DIR" ] && [ -f "$REPO_DIR/$SKILL_REL" ]; then
     cp -p "$REPO_DIR/$SKILL_REL" "$SKILL_FILE"
-    info "skill 已写入（取自本地检出 $REPO_DIR）→ $SKILL_FILE"
+    info "skill written (from the local checkout $REPO_DIR) -> $SKILL_FILE"
   else
-    command -v curl >/dev/null 2>&1 || die "需要 curl 下载 $SKILL_REL（或设置 ODW_REPO_DIR）"
-    curl -fsSL "$RAW_BASE/$REF/$SKILL_REL" -o "$SKILL_FILE" || die "下载 $SKILL_REL 失败（ref=$REF）"
-    info "skill 已写入（取自 $RAW_BASE/$REF）→ $SKILL_FILE"
+    command -v curl >/dev/null 2>&1 || die "curl is required to download $SKILL_REL (or set ODW_REPO_DIR)"
+    curl -fsSL "$RAW_BASE/$REF/$SKILL_REL" -o "$SKILL_FILE" || die "failed to download $SKILL_REL (ref=$REF)"
+    info "skill written (from $RAW_BASE/$REF) -> $SKILL_FILE"
   fi
 }
 
@@ -178,7 +178,7 @@ remove_skill() {
   # Clean up the directories this script created, but only while they are empty.
   rmdir "$(dirname "$SKILL_FILE")" 2>/dev/null || true
   rmdir "$(dirname "$(dirname "$SKILL_FILE")")" 2>/dev/null || true
-  info "已移除 skill → $SKILL_FILE"
+  info "skill removed -> $SKILL_FILE"
 }
 
 # ---------------------------------------------------------------- JSON helpers (node)
@@ -277,9 +277,9 @@ apply_renames() {
     to="$from.disabled"
     if [ -f "$from" ] && [ ! -e "$to" ]; then
       mv "$from" "$to"
-      info "已停用 $rel → $rel.disabled"
+      info "disabled $rel -> $rel.disabled"
     elif [ -e "$to" ] && [ ! -e "$from" ]; then
-      info "跳过 $rel：$to 已存在"
+      info "skipping $rel: $to already exists"
     fi
   done
 }
@@ -338,7 +338,7 @@ manifest_field() {
 
 cmd_install() {
   if [ -f "$MANIFEST" ]; then
-    die "已经安装过了（$MANIFEST）。先 rollback，或删除该清单后重装。"
+    die "already installed ($MANIFEST). Run rollback first, or delete the manifest and reinstall."
   fi
 
   local ts bak config_backup="" config_created=0 plugin_key="null" renamed_json="[]" sha add_result skill_existed="false"
@@ -356,10 +356,10 @@ cmd_install() {
     bak="$CONFIG_FILE.bak.$ts"
     cp -p "$CONFIG_FILE" "$bak"
     config_backup="$bak"
-    info "已备份配置 → $bak"
+    info "config backed up -> $bak"
   else
     config_created=1
-    info "配置不存在，稍后新建：$CONFIG_FILE"
+    info "no config yet; it will be created: $CONFIG_FILE"
   fi
 
   if [ -f "$SKILL_FILE" ]; then skill_existed="true"; fi
@@ -371,35 +371,35 @@ cmd_install() {
   fi
 
   write_manifest ""
-  info "已写安装清单（先写、后改，失败也能回滚）→ $MANIFEST"
+  info "manifest written first, before any change, so a failure can still roll back -> $MANIFEST"
 
   # --- 2. project A leftovers (files, then the config key) ---
   apply_renames
   if [ "$plugin_key" != "null" ]; then
     json_strip_plugin_key >/dev/null
-    info "已处理 opencode.json 的 plugin 键：$plugin_key"
+    info "handled the plugin key of opencode.json: $plugin_key"
   fi
 
   # --- 3. the plugin, through opencode's own installer ---
   if [ "$SCOPE" = "global" ]; then
     require_opencode
     mkdir -p "$CONFIG_DIR"
-    info "安装插件（opencode 的安装器会立刻装依赖，可能要一两分钟）..."
+    info "installing the plugin (opencode fetches the dependencies now, which can take a minute or two)..."
     if ! opencode plugin add "$PLUGIN_SPEC"; then
       # Measured once: the registry answered a dependency resolution with
       # "No matching version found for @redis/json@6.3.1" although that version exists.
-      warn "opencode plugin add 失败，10 秒后重试一次..."
+      warn "opencode plugin add failed; retrying once in 10s..."
       sleep 10
       opencode plugin add "$PLUGIN_SPEC" ||
-        die "opencode plugin add 失败（已重试一次）。修好后重跑：$0 install --$SCOPE；或先 $0 rollback --$SCOPE"
+        die "opencode plugin add failed (already retried once). Fix it and rerun: $0 install --$SCOPE; or roll back first: $0 rollback --$SCOPE"
     fi
   else
     add_result="$(json_add_plugin)"
     if [ "$add_result" = "added" ]; then
-      info "已写入项目配置的 plugins 键 → $CONFIG_FILE"
-      warn "项目级安装不预装依赖：opencode 下次启动时会后台安装该包（首次约 2.5 分钟，期间插件不可用）"
+      info "wrote the plugins key of the project config -> $CONFIG_FILE"
+      warn "a project install does not fetch dependencies up front: opencode installs the package in the background on its next start (about 2.5 minutes the first time, and the plugin is unavailable until then)"
     else
-      info "项目配置已包含该插件，跳过写入"
+      info "the project config already lists this plugin; not writing it again"
     fi
   fi
 
@@ -410,11 +410,11 @@ cmd_install() {
 
   cat <<EOF
 
-安装完成（$SCOPE_LABEL）。
-  1. 重启 opencode：全局配置与插件在 server 启动时读取。
-  2. 验证插件：opencode plugin list  应出现一行：odw  <commit>  $PLUGIN_SPEC
-  3. 验证触发：让它做一件"同一件事重复 N 遍"的活，它应加载 odw skill 并调 odw_plan / odw_run。
-  4. 出问题：$0 rollback --$SCOPE
+Install complete ($SCOPE_LABEL).
+  1. Restart opencode: the config and the plugins are read when the server starts.
+  2. Verify the plugin: opencode plugin list should show a line: odw  <commit>  $PLUGIN_SPEC
+  3. Verify the trigger: ask for a job that repeats one thing N times; it should load the odw skill and call odw_plan / odw_run.
+  4. If something breaks: $0 rollback --$SCOPE
 EOF
 }
 
@@ -425,11 +425,11 @@ cmd_update() {
 
   if [ "$SCOPE" = "global" ]; then
     require_opencode
-    info "更新插件包..."
+    info "updating the plugin package..."
     opencode plugin update "$PLUGIN_SPEC" ||
-      warn "opencode plugin update 返回非零（插件包未更新：它需要能连上 opencode 服务）；skill 仍会刷新"
+      warn "opencode plugin update returned non-zero (package not updated: it needs a reachable opencode service); the skill will still be refreshed"
   else
-    info "项目级安装跟随 $REF 分支，opencode 启动时自行解析；此处只刷新 skill"
+    info "a project install follows the $REF branch and opencode resolves it at start; only the skill is refreshed here"
   fi
 
   write_skill
@@ -443,7 +443,7 @@ cmd_update() {
     doc.skill = { ...(doc.skill ?? {}), sha256: process.env.ODW_SHA }
     fs.writeFileSync(file, JSON.stringify(doc, null, 2) + "\n")
   '
-  info "已刷新清单里的 skill 摘要"
+  info "refreshed the skill digest in the manifest"
 }
 
 # ---------------------------------------------------------------- status
@@ -455,21 +455,21 @@ cmd_status() {
 
   # A local install is easy to forget about, since the default scope is global.
   if [ "$SCOPE" = "global" ] && [ -f "$PROJECT_DIR/.opencode/.odw-migration.json" ]; then
-    printf 'note            : 本项目里有本地安装（加 --local 查看）\n'
+    printf 'note            : this project has a local install (add --local to see it)\n'
   fi
 
   if [ -f "$MANIFEST" ]; then
     printf 'manifest        : %s\n' "$MANIFEST"
   else
-    printf 'manifest        : 不存在（未安装，或清单被删）\n'
+    printf 'manifest        : absent (never installed, or the manifest was deleted)\n'
   fi
 
   local state
   state="$(json_has_plugin_spec)"
   if [ "$state" = "yes" ]; then
-    printf 'plugin spec     : 在册（配置含 %s）\n' "$PLUGIN_SPEC"
+    printf 'plugin spec     : registered (config contains %s)\n' "$PLUGIN_SPEC"
   else
-    printf 'plugin spec     : 不在册\n'
+    printf 'plugin spec     : not registered\n'
   fi
 
   if [ -f "$SKILL_FILE" ]; then
@@ -480,28 +480,28 @@ cmd_status() {
     printf 'skill sha256    : %s\n' "$sha"
     if [ -n "$recorded" ]; then
       if [ "$recorded" = "$sha" ]; then
-        printf 'skill freshness : 与安装时记录一致\n'
+        printf 'skill freshness : matches the digest recorded at install time\n'
       else
-        printf 'skill freshness : 与安装时记录不同（update 过，或手工改过）\n'
+        printf 'skill freshness : differs from the recorded digest (updated, or edited by hand)\n'
       fi
     fi
     if [ -n "$REPO_DIR" ] && [ -f "$REPO_DIR/$SKILL_REL" ]; then
       if [ "$(sha256_of "$REPO_DIR/$SKILL_REL")" = "$sha" ]; then
-        printf 'skill vs repo   : 与本地检出一致（%s）\n' "$REPO_DIR"
+        printf 'skill vs repo   : matches the local checkout (%s)\n' "$REPO_DIR"
       else
-        printf 'skill vs repo   : 与本地检出不一致 —— 跑 update 同步\n'
+        printf 'skill vs repo   : differs from the local checkout - run update to sync\n'
       fi
     fi
   else
-    printf 'skill           : 不存在\n'
+    printf 'skill           : absent\n'
   fi
 
   local rel
   for rel in $LEGACY_FILES; do
     if [ -e "$CONFIG_DIR/$rel" ]; then
-      printf 'legacy          : %s 仍然启用\n' "$rel"
+      printf 'legacy          : %s is still enabled\n' "$rel"
     elif [ -e "$CONFIG_DIR/$rel.disabled" ]; then
-      printf 'legacy          : %s 已停用\n' "$rel"
+      printf 'legacy          : %s is disabled\n' "$rel"
     fi
   done
 }
@@ -535,7 +535,7 @@ cmd_rollback() {
       const a = `${dir}/${from}`, b = `${dir}/${to}`
       if (fs.existsSync(b) && !fs.existsSync(a)) {
         fs.renameSync(b, a)
-        console.log(`已恢复 ${from}`)
+        console.log(`restored ${from}`)
       }
     }
   '
@@ -549,24 +549,24 @@ cmd_rollback() {
   #    script added is touched, so settings changed after installing survive the rollback.
   if [ -n "$backup_file" ] && [ -f "$backup_file" ]; then
     cp -p "$backup_file" "$CONFIG_FILE"
-    info "已恢复配置 ← $backup_file"
+    info "config restored from $backup_file"
   elif [ "$scope" != "global" ] && [ "$config_created" = "true" ]; then
     rm -f "$CONFIG_FILE"
-    info "已删除安装时新建的配置 → $CONFIG_FILE"
+    info "removed the config that the install created -> $CONFIG_FILE"
   elif [ "$scope" = "global" ]; then
     if command -v opencode >/dev/null 2>&1; then opencode plugin remove "$PLUGIN_SPEC" || true; fi
-    info "已从全局配置移除 $PLUGIN_SPEC"
+    info "removed $PLUGIN_SPEC from the global config"
   else
     local removed
     removed="$(json_remove_plugin)"
-    info "已从项目配置移除插件：$removed"
+    info "removed the plugin from the project config: $removed"
   fi
 
   rm -f "$MANIFEST"
   # Leave nothing behind for a project install: remove the dirs this script created, but only
   # while they are empty (a project may keep its own state in `.opencode/`).
   rmdir "$CONFIG_DIR" 2>/dev/null || true
-  info "已删除安装清单，回滚完成。重启 opencode 生效。"
+  info "manifest deleted; rollback complete. Restart opencode for it to take effect."
 }
 
 case "$MODE" in

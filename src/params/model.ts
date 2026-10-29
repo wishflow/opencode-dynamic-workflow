@@ -11,7 +11,7 @@ import { OdwError, type ModelRef } from "../types.ts"
 export function parseModelRef(input: string): ModelRef {
   const text = input.trim()
   if (text === "") {
-    throw new OdwError("bad-args", "model 不能为空字符串")
+    throw new OdwError("bad-args", "model must not be an empty string")
   }
   try {
     const parsed = Model.Ref.parse(text) as ModelRef
@@ -20,7 +20,7 @@ export function parseModelRef(input: string): ModelRef {
     const detail = error instanceof Error ? error.message : String(error)
     throw new OdwError(
       "bad-args",
-      `无法解析 model ${JSON.stringify(input)}：期望 "provider/model" 或 "provider/model#variant"（${detail.slice(0, 200)}）`,
+      `cannot parse model ${JSON.stringify(input)}: expected "provider/model" or "provider/model#variant" (${detail.slice(0, 200)})`,
     )
   }
 }
