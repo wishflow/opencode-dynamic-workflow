@@ -1,7 +1,6 @@
 {
   "name": "opencode-dynamic-workflow",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "description": "Dynamic workflows as a first-class citizen in opencode v2: the model writes a constrained script, the plugin runs it deterministically, and every worker is a host sub-session.",
   "type": "module",
   "license": "MIT",
@@ -20,11 +19,10 @@
     "test:unit": "vitest run tests/unit --reporter=dot",
     "test:contract": "vitest run tests/contract --reporter=dot"
   },
-  "peerDependencies": {
+  "dependencies": {
     "@opencode/plugin": ">=2.1.0"
   },
   "devDependencies": {
-    "@opencode/plugin": "^2.2.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0"
