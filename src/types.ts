@@ -291,7 +291,7 @@ export class WorkerFailedError extends OdwError {
 
 /**
  * Thrown when a model call is attempted from plugin `setup`. Measured: doing so
- * wedges the host server (PLAN §3.7), so it is a hard programming error, not a
+ * wedges the host server, so it is a hard programming error, not a
  * runtime condition to recover from.
  */
 export class SetupModelCallError extends OdwError {

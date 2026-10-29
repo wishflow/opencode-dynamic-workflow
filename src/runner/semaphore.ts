@@ -6,7 +6,7 @@
  * decremented and re-acquired, so a limited semaphore can never drop below zero
  * or starve a waiter.
  *
- * Deadlock note (PLAN §5.3): the *worker* semaphore and the *task* limiter used by
+ * Deadlock note: the *worker* semaphore and the *task* limiter used by
  * `ctx.parallel` are two separate instances. If `parallel` acquired the worker
  * semaphore and then its callback called `ctx.agent` - which also acquires it -
  * a run at the concurrency limit would deadlock immediately.

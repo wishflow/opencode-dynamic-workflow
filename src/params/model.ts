@@ -4,7 +4,7 @@ import { OdwError, type ModelRef } from "../types.ts"
 
 /**
  * `Model.Ref` is an effect Schema whose `parse` is synchronous and throws on bad
- * input (measured: PLAN §1 C3). Everything ODW accepts from the model or from
+ * input (measured: CONTRACT.md §3.1). Everything ODW accepts from the model or from
  * tool input has to pass through here so the failure is a readable ODW error
  * instead of a bare effect ParseError.
  */

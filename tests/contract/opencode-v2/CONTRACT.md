@@ -37,9 +37,9 @@ ODW_CONTRACT=1 npx vitest run tests/contract
 | 规则 | 原因 |
 |---|---|
 | 只在 `mkdtemp()` 出来的临时 git 项目里跑 | 插件按 location 加载；非 git 目录拿不到 `location.project.id` |
-| **绝不写** `~/.config/opencode/` | `OPENCODE_CONFIG_DIR` **不隔离**全局配置（PLAN §1 C9），用户真实配置始终被读取 |
+| **绝不写** `~/.config/opencode/` | `OPENCODE_CONFIG_DIR` **不隔离**全局配置，用户真实配置始终被读取 |
 | `spawnSync` 必须显式设 `PWD=<临时项目>` | opencode 用 `PWD` 而不是子进程 `cwd` 解析 location；只设 `cwd` 会**静默绑到调用者所在项目**（M1 踩过，断言 C1c 就是钉这个的） |
-| 探针插件只通过 `.opencode/plugins/odw-probe/index.ts` 一行 re-export 挂载 | 配置 `plugins: [...]` 在本版本对本地目录不生效（PLAN §1 C8） |
+| 探针插件只通过 `.opencode/plugins/odw-probe/index.ts` 一行 re-export 挂载 | 配置 `plugins: [...]` 在本版本对本地目录不生效（实测） |
 
 ## 3. 观察结果
 
@@ -181,7 +181,7 @@ harness 在临时项目里写入 `.opencode/skills/odw-contract-probe/SKILL.md`�
 | 注册表规模（本次） | 60 条 = 用户全局 `~/.config/opencode/skills/*` **与项目 skill 合并**，再加本 fixture |
 
 > 结论：ODW 的触发面是可被契约钉死的 —— 文件存在 → 上架 → frontmatter 解析 → 正文进注册表。
-> **契约没钉的两件事**（诚实标注）：① 全局 `~/.config/opencode/skills/` 那条路径（§2 规则禁止写用户全局配置）；② 「模型在真实会话里读到并主动激活它」—— 后者在真机验收清单里验（PLAN §9）。
+> **契约没钉的两件事**（诚实标注）：① 全局 `~/.config/opencode/skills/` 那条路径（§2 规则禁止写用户全局配置）；② 「模型在真实会话里读到并主动激活它」—— 后者要在真机验收里单独验。
 
 ## 4. 负向控制
 
@@ -210,7 +210,7 @@ FAIL  C21g  registry path points at the project skill file
 
 > 另外也踩过一次**假绿以外**的反面：探针默认挑 `model.list()` 里的第一个模型，而它是免费额度模型；额度耗尽后所有模型相关断言集体变红（`C7b`、`C9d`、`C9e` 全挂，报 `provider.quota`）。现在 harness 固定用 `compass/deepseek-v4.1-flash`（可用 `ODW_PROBE_MODEL` 覆盖）。**契约测试不能依赖免费额度。**
 
-## 5. 发现并已回写进 PLAN 的修正
+## 5. 与最初设计判断不符、已修正的发现
 
 | 编号 | 原判断 | 实测 |
 |---|---|---|

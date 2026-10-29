@@ -6,7 +6,7 @@ import { formatModelRef } from "../params/model.ts"
  *
  * Deliberately structural (all fields optional) rather than imported from
  * `@opencode/plugin`: this code runs against whatever the *installed* opencode
- * returns, which is a different version from the type package (PLAN §1, the
+ * returns, which is a different version from the type package (the
  * 2.1.0-vs-2.2.0 skew). A cast-based extractor would silently produce `undefined`
  * for a moved field; this one degrades one field at a time.
  */

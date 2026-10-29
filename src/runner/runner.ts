@@ -76,7 +76,7 @@ export type RunWorkflowResult = {
 /**
  * Executes one workflow run end to end.
  *
- * Ordering matters here and mirrors PLAN §7: the script text and metadata are
+ * Ordering matters here: the script text and metadata are
  * persisted *before* anything executes, so a run that dies mid-flight is still
  * diagnosable from disk alone.
  */
@@ -568,7 +568,7 @@ export async function loadInventory(deps: RunWorkflowDeps): Promise<Inventory> {
   }
 }
 
-/** `ctx.model.list()` / `ctx.agent.list()` return `{data, location}`, not arrays (PLAN §1 C12). */
+/** `ctx.model.list()` / `ctx.agent.list()` return `{data, location}`, not arrays (CONTRACT.md §3.1). */
 function unwrapList(value: unknown): unknown[] {
   if (Array.isArray(value)) return value
   const boxed = structurally(value)

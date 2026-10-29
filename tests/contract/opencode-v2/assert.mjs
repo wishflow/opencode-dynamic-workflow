@@ -106,7 +106,7 @@ export function assertContract({ obs, hookLines, logs, directory }) {
   check("C10a", "session.update({permissions}) accepted", okOf(c10.update), c10.update)
   check("C10b", "deny rule readable back", okOf(c10.readBack) && JSON.stringify(c10.readBack.value ?? {}).includes("deny"), undefined)
 
-  // C11 - node:vm capability gate (the A-tier ScriptHost fence, see PLAN §1/C11)
+  // C11 - node:vm capability gate (the A-tier ScriptHost fence, see CONTRACT.md §3.5)
   const c11 = get("c11-vm-capabilities") ?? {}
   check("C11a", "vm.createContext + Script works", okOf(c11.createContext) && c11.createContext.value === 2, c11.createContext)
   check("C11b", "codeGeneration strings:false blocks eval", errOf(c11.codegenStringsBlocked), c11.codegenStringsBlocked)

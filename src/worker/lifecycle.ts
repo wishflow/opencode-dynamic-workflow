@@ -3,7 +3,7 @@ import type { PermissionMode, PermissionRule, PermissionSpec } from "../types.ts
 /**
  * Permission posture -> concrete rules.
  *
- * Measured (PLAN §1 C4/C10): `session.create` and `session.update` both accept
+ * Measured: `session.create` and `session.update` both accept
  * `permissions: [{ action, resource, effect }]` and `session.get` reads the same
  * rules back, so a posture is just a rule list.
  *

@@ -77,7 +77,7 @@ export type WorkerDeps = {
  *    types), so a one-shot worker can still attempt a call - it is denied, and it
  *    still has to answer.
  *
- * Measured constraints this code encodes (PLAN §1 C5/C6/C7/C10):
+ * Measured constraints this code encodes (CONTRACT.md §3.1-§3.3):
  *  - `prompt` only enqueues; the turn is not started until `wait` is observed, and
  *    `context()` stays empty until the turn settles;
  *  - several workers can be prompted concurrently from inside a tool call - the

@@ -8,7 +8,8 @@
     ".": "./src/index.ts"
   },
   "files": [
-    "src"
+    "src",
+    "skills"
   ],
   "engines": {
     "node": ">=20"

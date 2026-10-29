@@ -4,7 +4,7 @@ import { addTokens, zeroTokens, type BudgetSnapshot, type Tokens, type WorkerUsa
  * Run-scoped accounting.
  *
  * `cache.read` is counted on purpose: it shows up non-zero on every real
- * round-trip (measured, PLAN §1 C6) and it is billed, so a budget that only sums
+ * round-trip (measured, CONTRACT.md §3.2) and it is billed, so a budget that only sums
  * `input` would silently under-report.
  *
  * The limit is checked *before* dispatching a worker, not after: the point is to

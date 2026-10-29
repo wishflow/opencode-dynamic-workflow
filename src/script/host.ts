@@ -18,9 +18,9 @@ export type ScriptRunOptions = {
 
 /**
  * The capability fence. A implementation is chosen from the measured contract
- * facts (PLAN §1 C11): `node:vm` with `codeGeneration` disabled is the A tier and
+ * facts (CONTRACT.md §3.5): `node:vm` with `codeGeneration` disabled is the A tier and
  * is what M2 ships. `worker_threads` (B tier) stays unimplemented until something
- * actually needs it - see PLAN §14.
+ * actually needs it.
  */
 export interface ScriptHost {
   readonly tier: "A" | "B"
@@ -32,7 +32,7 @@ export interface ScriptHost {
  * Returns the ScriptHost for this process.
  *
  * There is exactly one implementation today (A tier, `node:vm`). The indirection
- * exists so the escalation path in PLAN §14 - swap in a `worker_threads` host if
+ * exists so the escalation path - swap in a `worker_threads` host if
  * the capability gate ever proves insufficient - is a one-line change here rather
  * than a refactor of the runner. `host-vm.ts` imports this module type-only, so
  * this runtime import introduces no cycle.

@@ -6,3 +6,9 @@ coverage/
 # Local workflow run artifacts
 .odw/
 .opencode/odw/
+
+# Local-only: development notes and the dev entry point, kept on disk but not
+# part of the published repository.
+PLAN.md
+docs/
+.opencode/dev/

@@ -1,7 +1,7 @@
 import { SetupModelCallError } from "../types.ts"
 
 /**
- * Measured (PLAN §1 C10 / §3.7): a plugin `setup` runs once per *discovered
+ * Measured: a plugin `setup` runs once per *discovered
  * plugin location* - 18 times in one measured startup - and a model call made
  * from inside it deadlocks the host server. `setup` is therefore only allowed to
  * register tools/commands/hooks.
