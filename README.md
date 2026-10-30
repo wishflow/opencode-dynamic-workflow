@@ -53,9 +53,8 @@ The plugin goes in through opencode's own installer (`opencode plugin add github
 |---|---|---|
 | 0 | Write the manifest `~/.config/opencode/.odw-migration.json` | **First**, before any mutation, so a failure halfway still leaves a usable `rollback` |
 | 1 | Back up `opencode.json` -> `opencode.json.bak.<ts>` | Rollback needs the exact previous bytes |
-| 2 | Clean up a legacy *project A* install: drop the deprecated `plugin` key, rename `plugins/odw.mjs` and `commands/{odw,ultracode,workflows}.md` to `*.disabled` | Renaming, never deleting; the config is updated before the files stop being referenced |
-| 3 | `opencode plugin add <spec>` (one automatic retry) | It edits the config itself; the retry covers a real npm flake, see below |
-| 4 | Write the skill `~/.config/opencode/skills/odw/SKILL.md` | Last, so the trigger surface only appears once the executor is there |
+| 2 | `opencode plugin add <spec>` (one automatic retry) | It edits the config itself; the retry covers a real npm flake, see below |
+| 3 | Write the skill `~/.config/opencode/skills/odw/SKILL.md` | Last, so the trigger surface only appears once the executor is there |
 
 Then **restart opencode** (config and plugins are read at server start) and check:
 
@@ -63,7 +62,7 @@ Then **restart opencode** (config and plugins are read at server start) and chec
 opencode plugin list          # should show: odw  <commit>  github:wishflow/opencode-dynamic-workflow
 ```
 
-> The retry in step 3 is not defensive noise: `opencode plugin add` failed on its first attempt in 2 of 3 observed runs, with transient registry errors (`No matching version found for @redis/json@6.3.1`, `Error: aborted`), and then succeeded immediately on retry.
+> The retry in step 2 is not defensive noise: `opencode plugin add` failed on its first attempt in 2 of 3 observed runs, with transient registry errors (`No matching version found for @redis/json@6.3.1`, `Error: aborted`), and then succeeded immediately on retry.
 
 ### Project-local
 
@@ -93,36 +92,13 @@ opencode's CLI only ever edits the **global** config, so `--local` writes the pr
 ./scripts/odw-install.sh rollback  [--global|--local]   # undo, back to the previous bytes
 ```
 
-`status` reports the scope, the config/skill/manifest paths, whether the plugin spec is registered, whether the skill still matches the digest recorded at install time, and whether a legacy install is still lying around. With no `--local` it also tells you whether the current project has a local install.
+`status` reports the scope, the config/skill/manifest paths, whether the plugin spec is registered, and whether the skill still matches the digest recorded at install time. With no `--local` it also tells you whether the current project has a local install.
 
 `update` refreshes the skill and runs `opencode plugin update` best-effort (that command needs a reachable opencode service; if it fails you get a warning, not a failed update).
 
 `rollback` restores **files first and the config last**. That order is deliberate: restoring the config first opens a window where it names a plugin file that does not exist yet, and opencode's plugin registry reconcile hits it, logging a burst of `failed to load plugin ... ENOENT`.
 
 `--ref <ref>` pins the download to a branch/tag instead of `main`.
-
----
-
-## Migrating from the old plugin (project A)
-
-The install script performs this migration; the table above is what it does. The short version of what changes:
-
-| Old | New | Why |
-|---|---|---|
-| `opencode.json` -> `"plugin": ["./plugins/odw.mjs"]` | the `plugin` key is removed; `plugins: ["github:wishflow/..."]` is used instead | `plugin` is deprecated in v2 **and** points at a *file*; only a `<name>/index.ts` *directory* is discovered. The old key was also the source of a startup `WARN must be a directory` |
-| `plugins/odw.mjs` (the V1 wrapper) | renamed `odw.mjs.disabled` | Kept on disk so `rollback` can restore it; nothing references it any more |
-| `commands/{odw,ultracode,workflows}.md` | renamed `*.disabled` | `/odw` only said `workflow: $ARGUMENTS`; `ultracode`/`workflows` call tools that no longer exist. `/workflow` is re-registered by this plugin |
-| `odw_ultracode` | **not carried over** | A global "ultracode" switch means any prompt might silently start an orchestration, which contradicts the design (execution is always explicit: `/workflow` or `odw_run`) |
-| `odw_workflows` | **not carried over** | It read daemon state; ODW's record lives in `.odw/runs/<runId>/`, and two sources of truth is one too many |
-| `~/.odw/config.json`, `odw-daemon` | not needed | ODW needs no key and runs no daemon |
-
-If you installed the **old** plugin first, its own manifest is still on disk (`~/.config/opencode/.odw-migration.json`, written in an older format) and `install` will refuse rather than guess:
-
-```text
-odw-install: already installed (/Users/you/.config/opencode/.odw-migration.json). Run rollback first, or delete the manifest and reinstall.
-```
-
-That refusal is deliberate - the script will not overwrite a manifest whose shape it does not understand. Either roll the old install back first, or move that file aside and reinstall. `install` also refuses when *its own* manifest is present, for the same reason.
 
 ---
 
@@ -231,7 +207,7 @@ Scripts run in `node:vm`, and the injected allowlist is **only** `ctx` plus a re
 - the real defence against mistakes is not the isolation but the caps (next section) plus structured errors plus a record of every step;
 - if real isolation is ever needed, the interface is already shaped to escalate to a `worker_threads` host (which can be `terminate()`d).
 
-The fence is also a **startup check**: `vm` must support `runInContext({timeout})` and actually interrupt a pure-CPU infinite loop, or this tier does not hold. Measured on opencode 2.1.0 (embedded Bun 1.4.2): all four checks pass.
+The fence is **verified by the contract suite** against a real opencode: `vm` must support `runInContext({timeout})` and actually interrupt a pure-CPU infinite loop, or this tier does not hold. Measured on opencode 2.1.0 (embedded Bun 1.4.2): all four checks pass.
 
 ---
 
@@ -244,7 +220,7 @@ The fence is also a **startup check**: `vm` must support `runInContext({timeout}
 | Total workers | **50** | Exceeding it raises `worker-limit`; it is **not** silently truncated |
 | Primitive calls | **500** steps | Each `agent`/`parallel`/`pipeline`/`loop`/`verify`/`checkpoint`/`log`/`phase` costs 1 step. This guards the "free but runaway" case, e.g. `while(true) await ctx.log("x")` |
 | Budget | counted only, by default | With `budgetUsd` it is enforced **after the fact**: spend accumulates as workers finish, and once over, no new worker is started (running ones are not killed) |
-| Cancellation | `context.signal` | On cancel: stop dispatching -> `interrupt` -> `remove` |
+| Cancellation | `context.signal` | On cancel: stop dispatching -> `interrupt` the running workers (their sessions are kept) |
 
 > **Honest note (measured):** the *money* semantics of `budgetUsd` cannot be verified on free models - `compass/deepseek-v4.1-flash` reports `cost = 0` on every call (with non-zero token counts). So the "over budget, stop dispatching" path has unit coverage but no real-dollar evidence; token counting, `maxWorkers`, `maxSteps` and the concurrency cap all have real-machine evidence.
 
@@ -275,6 +251,8 @@ Every run leaves the evidence on disk under `<project>/.odw/runs/<runId>/`:
 ├── result.json        # machine-readable result: workers/steps/cost/tokens/returnValue/humanSummary
 └── checkpoints/       # files written by ctx.checkpoint (labels are sanitized against traversal)
 ```
+
+**Only the last 50 runs are kept.** At the end of every run, the run directories are sorted by `runId` and all but the last 50 are pruned; default `runId`s are timestamps, so that means the 50 most recent.
 
 **Worker sessions are not deleted.** Their transcripts are the primary evidence of what happened, and their `parentID` makes them foldable in your session tree.
 
@@ -314,7 +292,6 @@ opencode-dynamic-workflow/
 | A passing plan is not a passing run | Logic errors, runtime failures and worker counts are all invisible to it |
 | Free models report no money | See the honest note under Limits |
 | A worker inherits the session's model | Unless the script passes `model` (or `effort`) on that call. If the session runs on a free tier, every worker hits the provider quota and the run fails with `kind: "internal"` - pass `--model` explicitly when you drive ODW from `opencode run` |
-| The old `odw_ultracode` / `odw_workflows` are not carried over | Two sources of truth is one too many; the old commands are renamed, not deleted, so this is reversible |
 
 ---
 
