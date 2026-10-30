@@ -31,6 +31,62 @@ model                  plugin (this repo)                    host opencode
 
 ---
 
+## Performance
+
+The same batch of tasks, done three ways:
+
+| Approach | What it does |
+|---|---|
+| **Single session** | One opencode session does every task itself, no ODW |
+| **ODW** | One session runs a workflow; `ctx.parallel` hands the tasks to worker sub-sessions |
+| **Multi-process** | One separate `opencode run` process per task, with a cap on how many run at once. This is roughly what tools that orchestrate external CLIs do; here it is simulated with `opencode run` directly, no specific project was tested |
+
+**Takeaways**
+
+- **Memory and threads barely move.** ODW running 8 workers at once peaks at 417 MB and 57 threads - about the same as a single session (377 MB, 56 threads). Eight concurrent processes take 1.8-2.4 GB and 420-450 threads.
+- **The more tasks, the bigger the win.** 16 summary tasks: ODW 24.2 s, single session 39.7 s (about 1.6x faster). At 8 tasks all three land at 15-18 s, because ODW pays a few seconds of fixed overhead (the main session has to start the workflow and reply at the end).
+- **Stable under concurrency.** With 8 concurrent processes, the opencode processes contend for the same SQLite session database (`SQLiteError: database is locked`) and some exit 1 (in 4 of 5 rounds, 4-9 processes per round). ODW's workers all live in one process and never hit it.
+- **More tokens in total, almost all of them cached.** Every worker is a fresh session that carries the system prompt and tool descriptions again, so ODW's total input is 4.5-9x a single session's; 94-97% of it is a cache hit, and the uncached part is only 19-52% higher. What that costs depends on how your provider prices cache hits.
+- **Don't use ODW for one-step work.** "Read the first line of 8 files" takes a single session 7.7 s (it issues all 8 reads in one step); ODW needs 15.2 s and more tokens.
+
+Each cell is the median of 3 rounds (per column). Input tokens are split into uncached and cache-hit.
+
+**Summaries: 8 source files, 5 bullets each, 4 at a time**
+
+| Approach | Wall | Peak RSS | Peak threads | Peak procs | Input uncached | Input cached | Output | Correct |
+|---|--:|--:|--:|--:|--:|--:|--:|:--:|
+| Single session | 15.0 s | 400 MB | 57 | 3 | 10.8k | 26.5k | 1.6k | 8/8 |
+| **ODW** | 17.8 s | **411 MB** | **58** | 4 | 13.6k | 260.1k | 2.3k | 8/8 |
+| Multi-process | 15.6 s | 1416 MB | 224 | 12 | 23.1k | 224.9k | 2.4k | 8/8 |
+
+**Summaries: 16 source files, 8 at a time**
+
+| Approach | Wall | Peak RSS | Peak threads | Peak procs | Input uncached | Input cached | Output | Correct |
+|---|--:|--:|--:|--:|--:|--:|--:|:--:|
+| Single session | 39.7 s | 377 MB | 56 | 4 | 25.0k | 92.5k | 3.2k | 16/16 |
+| **ODW** | **24.2 s** | **417 MB** | **57** | 7 | 29.9k | 493.8k | 4.5k | **16/16** |
+| Multi-process | 194.9 s | 1950 MB | 436 | 24 | 27.3k | 290.8k | 3.1k | 10/16 |
+
+In this group the multi-process rounds lost 7, 5 and 4 processes to `database is locked`; failed tasks produce nothing, hence the lower tokens and longer wall time. Two extra rounds: one lost 9; the other had no failures and took 38.5 s, 2391 MB and 448 threads - so even when nothing fails it only matches a single session's speed, at 5.7x ODW's memory.
+
+**First line: 8 tiny files, 4 at a time (fixed overhead)**
+
+| Approach | Wall | Peak RSS | Peak threads | Peak procs | Input uncached | Input cached | Output | Correct |
+|---|--:|--:|--:|--:|--:|--:|--:|:--:|
+| **Single session** | **7.7 s** | 383 MB | 57 | 4 | 5.7k | 26.4k | 0.3k | 8/8 |
+| ODW | 15.2 s | 403 MB | 57 | 5 | 8.6k | 276.5k | 0.7k | 8/8 |
+| Multi-process | 20.5 s | 1397 MB | 223 | 12 | 11.8k | 245.6k | 0.6k | 8/8 |
+
+**Method.** Apple M1 Pro (10 cores), 16 GB, macOS 14.5; opencode 2.1.0; model `compass/deepseek-v4.1-flash`. An isolated opencode config holding only the model provider (no MCP servers, no other plugins), ODW loaded from this checkout. Every approach runs in a fresh throwaway project each round, after one warm-up run. The whole process tree is sampled every 250 ms and the peak kept; memory is the sum of RSS, which double-counts pages shared between processes, so the multi-process figures somewhat overstate real usage. Tokens are read from opencode's own session table for every session the round created, worker sub-sessions included. Every answer must carry a marker (`== <path> ==`, or the file's real first line) and the script checks each one. MCP was not measured: in a real setup every opencode process starts its own set of local MCP servers, so the multi-process numbers would only go up.
+
+```sh
+node tests/bench/bench.mjs --task summary --n 8 --c 4 --rounds 3
+node tests/bench/bench.mjs --task summary --n 16 --c 8 --rounds 3
+node tests/bench/bench.mjs --task line --n 8 --c 4 --rounds 3
+```
+
+---
+
 ## Install
 
 Requires opencode v2 (it loads TypeScript directly through its embedded Bun) and `node` on `PATH`. ODW has **zero runtime dependencies**.
@@ -276,7 +332,8 @@ opencode-dynamic-workflow/
 ├── scripts/odw-install.sh          # install / update / status / rollback (global, or --local)
 ├── tests/
 │   ├── unit/                       # 84: primitives / steps / normalize / plan scanner / worker / skill
-│   └── contract/opencode-v2/       # 62 assertions: probe + assert + harness + CONTRACT.md
+│   ├── contract/opencode-v2/       # 62 assertions: probe + assert + harness + CONTRACT.md
+│   └── bench/bench.mjs             # performance: single session vs ODW vs one process per worker
 ├── workflows/audit.ts              # a `file:` carrier example (pipeline + checkpoint + verify)
 └── README.md
 ```
@@ -302,6 +359,7 @@ npx tsc --noEmit                               # type check (no build step, no t
 npx vitest run tests/unit                      # 84 unit tests
 ODW_CONTRACT=1 npx vitest run tests/contract   # 62 contract assertions (starts real opencode)
 node tests/contract/opencode-v2/run.mjs --keep # keep the artifacts for debugging
+node tests/bench/bench.mjs                     # the performance comparison above
 ```
 
 The contract suite is a **behaviour snapshot taken by running opencode itself** (`tests/contract/opencode-v2/CONTRACT.md`), not a mock: it creates a throwaway git project, plants its probe and a skill fixture, spawns `opencode run`, and asserts the raw observations. It never reads or writes your `~/.config/opencode`.
